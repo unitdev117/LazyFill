@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "LazyFill — AI Autofill Assistant",
+  "version": "1.0.1",
+  "description": "Intelligent AI-powered form autofill using Google Gemini. Create profiles, scan pages, and let AI fill your forms.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "backend/service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "frontend/scanner.js",
+        "frontend/observer.js",
+        "frontend/event_injector.js",
+        "frontend/ghost_text.js"
+      ],
+      "css": ["frontend/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "frontend/popup/popup.html",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["reset.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

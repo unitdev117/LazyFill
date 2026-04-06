@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LazyFill — Storage Reset</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 500px; margin: 60px auto; padding: 20px; background: #0f0f1a; color: #e2e8f0; }
+    h2 { color: #a78bfa; }
+    button { background: #7c3aed; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; margin: 8px 4px; }
+    button:hover { background: #6d28d9; }
+    button.danger { background: #dc2626; }
+    button.danger:hover { background: #b91c1c; }
+    #log { background: #1e1e2e; border: 1px solid #333; border-radius: 8px; padding: 16px; margin-top: 20px; font-family: monospace; font-size: 13px; min-height: 100px; white-space: pre-wrap; color: #a3e635; }
+    .ok { color: #a3e635; }
+    .err { color: #f87171; }
+    .info { color: #60a5fa; }
+  </style>
+</head>
+<body>
+  <h2>🔧 LazyFill Storage Reset</h2>
+  <p>Use this page to fix storage corruption errors.</p>
+
+  <button onclick="clearApiKey()">🗑 Clear API Key Only</button>
+  <button class="danger" onclick="clearAll()">⚠ Clear ALL Extension Data</button>
+  <button onclick="showStorage()">🔍 View Current Storage</button>
+
+  <div id="log">Ready. Click a button above...</div>
+
+  <script>
+    const log = document.getElementById('log');
+
+    function print(msg, type = 'ok') {
+      const line = document.createElement('div');
+      line.className = type;
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      log.appendChild(line);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function clearApiKey() {
+      log.innerHTML = '';
+      chrome.storage.local.remove('lazyfill_api_key', () => {
+        if (chrome.runtime.lastError) {
+          print('ERROR: ' + chrome.runtime.lastError.message, 'err');
+        } else {
+          print('✓ API key cleared successfully from storage.', 'ok');
+          print('Now go to the extension popup → Settings tab → paste your API key again.', 'info');
+        }
+      });
+    }
+
+    function clearAll() {
+      log.innerHTML = '';
+      chrome.storage.local.clear(() => {
+        if (chrome.runtime.lastError) {
+          print('ERROR: ' + chrome.runtime.lastError.message, 'err');
+        } else {
+          print('✓ ALL LazyFill data cleared.', 'ok');
+          print('Extension is now in a fresh state. Re-enter your API key and profiles.', 'info');
+        }
+      });
+    }
+
+    function showStorage() {
+      log.innerHTML = '';
+      chrome.storage.local.get(null, (items) => {
+        if (chrome.runtime.lastError) {
+          print('ERROR: ' + chrome.runtime.lastError.message, 'err');
+          return;
+        }
+        if (Object.keys(items).length === 0) {
+          print('Storage is empty.', 'info');
+          return;
+        }
+        for (const [key, val] of Object.entries(items)) {
+          const display = typeof val === 'string' ? val.slice(0, 60) + (val.length > 60 ? '...' : '') : JSON.stringify(val).slice(0, 80);
+          print(`${key}: ${display}`, 'info');
+        }
+      });
+    }
+  </script>
+</body>
+</html>

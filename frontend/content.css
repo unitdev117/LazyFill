@@ -1,0 +1,42 @@
+/* ============================================================
+ *  CONTENT SCRIPT STYLES — Ghost Text & Fill Animations
+ * ============================================================ */
+
+/* Ghost text styling — semi-transparent placeholder */
+.lazyfill-ghost::placeholder {
+  color: #6C63FF !important;
+  opacity: 0.6 !important;
+  font-style: italic !important;
+  transition: opacity 0.3s ease;
+}
+
+.lazyfill-ghost:focus::placeholder {
+  opacity: 0.8 !important;
+}
+
+/* Committed animation — brief green flash */
+.lazyfill-committed {
+  animation: lazyfill-commit-pulse 0.8s ease-out !important;
+}
+
+@keyframes lazyfill-commit-pulse {
+  0% {
+    box-shadow: 0 0 0 2px #4CAF50, 0 0 16px rgba(76, 175, 80, 0.4);
+    background-color: rgba(76, 175, 80, 0.08);
+  }
+  100% {
+    box-shadow: 0 0 0 0px transparent;
+    background-color: transparent;
+  }
+}
+
+/* Tab hint tooltip */
+.lazyfill-ghost:focus::after {
+  content: 'Press Tab to accept';
+  position: absolute;
+  bottom: -20px;
+  left: 0;
+  font-size: 11px;
+  color: #6C63FF;
+  opacity: 0.7;
+}
