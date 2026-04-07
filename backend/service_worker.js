@@ -12,7 +12,7 @@
  */
 
 import SettingsManager from './settings_manager.js';
-import AIController from './ai_controller.js';
+import AIController from './controllers/ai_controller.js';
 import { handleError } from './error_handler.js';
 import db from '../database/db_adapter.js';
 

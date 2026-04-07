@@ -9,7 +9,7 @@
  * ============================================================
  */
 
-import { handleError } from './error_handler.js';
+import { handleError } from '../error_handler.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
