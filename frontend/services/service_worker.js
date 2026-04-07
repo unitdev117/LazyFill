@@ -12,9 +12,9 @@
  */
 
 import SettingsManager from './settings_manager.js';
-import AIController from './controllers/ai_controller.js';
-import { handleError } from './error_handler.js';
-import db from './database/db_adapter.js';
+import AIController from '../../backend/controllers/ai_controller.js';
+import { handleError } from '../../backend/error_handler.js';
+import db from '../../backend/database/db_adapter.js';
 
 /* -------------------------------------------------------
  *  MESSAGE ROUTER — maps action names to handler functions
@@ -176,7 +176,100 @@ const handlers = {
     await db.clearLogs();
     return { success: true };
   },
+
+  REQUEST_AUTONOMOUS_GHOST: async (payload, sender) => {
+    const tabId = payload.tabId || (sender.tab ? sender.tab.id : null);
+    if (tabId) {
+      await checkAndGhost(tabId);
+      return { success: true };
+    }
+    return { success: false, error: 'No tab ID' };
+  }
 };
+
+/* -------------------------------------------------------
+ *  AUTONOMOUS GHOST ENGINE
+ * ------------------------------------------------------- */
+
+async function checkAndGhost(tabId) {
+  console.log('[LazyFill] Auto-ghost check for tab:', tabId);
+  const settings = await SettingsManager.getSettings();
+  if (!settings.ghostPreviewEnabled) return;
+
+  const apiKey = await SettingsManager.getApiKey();
+  const profile = await SettingsManager.getActiveProfile();
+  if (!apiKey || !profile) return;
+
+  // SPA Retry Logic: Try up to 3 times with 2s delays to catch lazy-loaded forms
+  const MAX_RETRIES = 3;
+  let scanRes = null;
+
+  for (let i = 0; i <= MAX_RETRIES; i++) {
+    try {
+      scanRes = await chrome.tabs.sendMessage(tabId, { action: 'SCAN_PAGE' });
+      if (scanRes?.success && scanRes.scannedFields?.length > 0) {
+        console.log(`[LazyFill] Found ${scanRes.count} fields on attempt ${i + 1}`);
+        break;
+      }
+    } catch (e) {
+      // Content script might not be ready yet
+    }
+    if (i < MAX_RETRIES) {
+      await new Promise(r => setTimeout(r, 2500));
+    }
+  }
+
+  if (!scanRes?.success || !scanRes.scannedFields?.length) {
+    console.log('[LazyFill] Auto-ghost check timed out or found no fields');
+    return;
+  }
+
+  try {
+    // 2. Consult AI
+    const aiRes = await AIController.generateFill(
+      apiKey, 
+      scanRes.scannedFields, 
+      profile.fields, 
+      profile.name
+    );
+
+    // 3. Show Ghost Text
+    if (aiRes.success && aiRes.mappings?.length) {
+      console.log(`[LazyFill] AI returned ${aiRes.mappings.length} mappings. Showing ghosts...`);
+      await chrome.tabs.sendMessage(tabId, {
+        action: 'SHOW_GHOST_TEXT',
+        payload: { 
+          mappings: aiRes.mappings, 
+          scannedFields: scanRes.scannedFields 
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('[LazyFill] Autonomous scan failed:', err.message);
+  }
+}
+
+/* -------------------------------------------------------
+ *  NAVIGATION LISTENERS
+ * ------------------------------------------------------- */
+
+const handleNav = (details) => {
+  if (details.frameId === 0 && details.url.startsWith('http')) {
+    checkAndGhost(details.tabId);
+  }
+};
+
+// standard load
+chrome.webNavigation.onCompleted.addListener(handleNav);
+// SPA / History pushState
+chrome.webNavigation.onHistoryStateUpdated.addListener(handleNav);
+
+// Tab status manual fallback
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url && tab.url.startsWith('http')) {
+    checkAndGhost(tabId);
+  }
+});
 
 /* -------------------------------------------------------
  *  MAIN LISTENER

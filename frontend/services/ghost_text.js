@@ -16,8 +16,10 @@
 
 (function () {
   'use strict';
+  console.log('[LazyFill] Ghost Text module initializing...');
 
-  if (window.__lazyFillGhostTextLoaded) return;
+  console.log('[LazyFill] Ghost Text module initializing...');
+
   window.__lazyFillGhostTextLoaded = true;
 
   const ghostState = new Map();
@@ -305,91 +307,7 @@
    *  MESSAGE LISTENER
    * -------------------------------------------------- */
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message.action === 'SHOW_GHOST_TEXT') {
-      const { mappings, scannedFields } = message.payload;
-      
-      // Store globally so Complete Auto Fill can force-fill everything
-      lastMappings = mappings;
-      lastScannedFields = scannedFields;
 
-      // Clear previous overlays before showing new ones
-      clearAllGhosts();
-
-      let shown = 0;
-      mappings.forEach((mapping) => {
-        const fieldMeta = scannedFields[mapping.index];
-        if (!fieldMeta || !mapping.value) return;
-
-        let el = null;
-
-        // Resolve element from metadata
-        if (fieldMeta.id) {
-          el = document.getElementById(fieldMeta.id);
-        }
-        if (!el && fieldMeta.name) {
-          el = document.querySelector(`[name="${CSS.escape(fieldMeta.name)}"]`);
-        }
-        // Fallback: match by placeholder or aria-label
-        if (!el && fieldMeta.placeholder) {
-          el = document.querySelector(
-            `input[placeholder="${CSS.escape(fieldMeta.placeholder)}"],` +
-            `textarea[placeholder="${CSS.escape(fieldMeta.placeholder)}"]`
-          );
-        }
-
-        if (el) {
-          // If the field is already filled (either by native autofill or user), DO NOT show suggestions
-          const currentVal = el.value || (el.isContentEditable ? el.innerText.replace(/\s/g, '') : '');
-          if (!currentVal) {
-             showGhost(el, mapping.value);
-             shown++;
-          }
-        }
-      });
-
-      sendResponse({ success: true, shown });
-      return true;
-    }
-
-    if (message.action === 'CLEAR_GHOST_TEXT') {
-      clearAllGhosts();
-      sendResponse({ success: true });
-      return true;
-    }
-
-    // Commits only visible ghosts (e.g. if we trigger via hotkey for just empty fields)
-    if (message.action === 'COMMIT_ALL_GHOSTS') {
-      let committed = 0;
-      ghostState.forEach((state, key) => {
-        const el = state.el || findElementByKey(key);
-        if (el && commitGhost(el)) committed++;
-      });
-      sendResponse({ success: true, committed });
-      return true;
-    }
-
-    // Force commits ALL background AI mappings, including fields that already had data
-    if (message.action === 'COMMIT_ALL_MAPPINGS') {
-      if (!lastMappings || lastMappings.length === 0) {
-        sendResponse({ success: false, error: 'No cached AI mappings available.' });
-        return true;
-      }
-      
-      let filled = 0;
-      
-      if (window.__lazyFillInjector && window.__lazyFillInjector.batchFill) {
-        const result = window.__lazyFillInjector.batchFill(lastMappings, lastScannedFields);
-        filled = result.filled;
-      }
-      
-      // Since everything is fully filled now, clear any remaining overlays
-      clearAllGhosts();
-      
-      sendResponse({ success: true, committed: filled });
-      return true;
-    }
-  });
 
   /* --------------------------------------------------
    *  EXPOSE
@@ -399,6 +317,48 @@
     showGhost,
     clearGhost,
     clearAllGhosts,
-    commitGhost
+    commitGhost,
+    
+    // Centralized Listener Bridge methods
+    showGhostBatch: (mappings, scannedFields) => {
+      lastMappings = mappings;
+      lastScannedFields = scannedFields;
+      clearAllGhosts();
+      let shown = 0;
+      mappings.forEach((mapping) => {
+        const fieldMeta = scannedFields[mapping.index];
+        if (!fieldMeta || !mapping.value) return;
+
+        const el = window.__lazyFillScanner ? window.__lazyFillScanner.resolveElement(fieldMeta, scannedFields) : document.getElementById(fieldMeta.id);
+
+        if (el && !el.value && !el.innerText.trim()) {
+          showGhost(el, mapping.value);
+          shown++;
+        }
+      });
+      return shown;
+    },
+    getGhostCount: () => ghostState.size,
+    commitAllVisible: () => {
+      let committed = 0;
+      ghostState.forEach((state, key) => {
+        const el = state.el || findElementByKey(key);
+        if (el && commitGhost(el)) committed++;
+      });
+      return committed;
+    },
+    commitAllMappings: (sendResponse) => {
+      if (!lastMappings || lastMappings.length === 0) {
+        sendResponse({ success: false, error: 'No cached AI mappings available.' });
+        return;
+      }
+      let filled = 0;
+      if (window.__lazyFillInjector && window.__lazyFillInjector.batchFill) {
+        const result = window.__lazyFillInjector.batchFill(lastMappings, lastScannedFields);
+        filled = result.filled;
+      }
+      clearAllGhosts();
+      sendResponse({ success: true, committed: filled });
+    }
   };
 })();

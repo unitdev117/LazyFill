@@ -11,7 +11,6 @@
 (function () {
   'use strict';
 
-  if (window.__lazyFillInjectorLoaded) return;
   window.__lazyFillInjectorLoaded = true;
 
   /* --------------------------------------------------
@@ -109,6 +108,10 @@
         } else {
           el.value = value;
         }
+      } else if (tag === 'contenteditable' || el.isContentEditable) {
+        el.innerText = value;
+        // Also try to set value just in case it's a hybrid
+        try { el.value = value; } catch(_) {}
       } else {
         // input
         const type = (el.getAttribute('type') || 'text').toLowerCase();
@@ -125,7 +128,7 @@
       }
 
       // Dispatch events
-      dispatchEvents(el);
+      dispatchKeyboardEvents(el, value);
 
       // Visual feedback — brief highlight
       addFillAnimation(el);
@@ -166,56 +169,11 @@
    * @returns {HTMLElement|null}
    */
   function resolveElement(fieldMeta, allFields) {
-    let root = document;
-
-    // Handle iframe selectors
-    if (fieldMeta.frameSelector) {
-      try {
-        const iframe = document.querySelector(fieldMeta.frameSelector);
-        if (iframe?.contentDocument) {
-          root = iframe.contentDocument;
-        }
-      } catch (_) {}
+    if (window.__lazyFillScanner && window.__lazyFillScanner.resolveElement) {
+      return window.__lazyFillScanner.resolveElement(fieldMeta, allFields);
     }
-
-    // 1. Try by ID
-    if (fieldMeta.id) {
-      const el = root.getElementById(fieldMeta.id);
-      if (el) return el;
-    }
-
-    // 2. Try by name + tag
-    if (fieldMeta.name) {
-      const el = root.querySelector(
-        `${fieldMeta.tagName}[name="${CSS.escape(fieldMeta.name)}"]`
-      );
-      if (el) return el;
-    }
-
-    // 3. Fallback to index-based re-scan
-    if (typeof fieldMeta.index === 'number' && allFields && allFields[fieldMeta.index]) {
-      const scanData = allFields[fieldMeta.index];
-      if (scanData.id) {
-        const el = root.getElementById(scanData.id);
-        if (el) return el;
-      }
-      if (scanData.name) {
-        const el = root.querySelector(
-          `${scanData.tagName}[name="${CSS.escape(scanData.name)}"]`
-        );
-        if (el) return el;
-      }
-    }
-
-    // 4. Positional fallback — get all fillable elements by order
-    if (typeof fieldMeta.index === 'number') {
-      const allEls = root.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]):not([type="image"]), textarea, select');
-      if (allEls[fieldMeta.index]) {
-        return allEls[fieldMeta.index];
-      }
-    }
-
-    return null;
+    // Minimal fallback if scanner is missing (unlikely)
+    return document.getElementById(fieldMeta.id) || document.querySelector(`[name="${CSS.escape(fieldMeta.name)}"]`);
   }
 
   /* --------------------------------------------------
@@ -258,26 +216,7 @@
    *  MESSAGE LISTENER
    * -------------------------------------------------- */
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message.action === 'FILL_FIELDS') {
-      const { mappings, scannedFields } = message.payload;
-      const result = batchFill(mappings, scannedFields);
-      sendResponse({ success: true, ...result });
-      return true;
-    }
 
-    if (message.action === 'FILL_SINGLE_FIELD') {
-      const { fieldMeta, value, scannedFields } = message.payload;
-      const el = resolveElement(fieldMeta, scannedFields);
-      if (el) {
-        setFieldValue(el, value);
-        sendResponse({ success: true });
-      } else {
-        sendResponse({ success: false, error: { message: 'Element not found.' } });
-      }
-      return true;
-    }
-  });
 
   /* --------------------------------------------------
    *  EXPOSE FOR OTHER CONTENT SCRIPTS

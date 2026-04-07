@@ -15,8 +15,10 @@
 
 (function () {
   'use strict';
+  console.log('[LazyFill] Scanner module initializing...');
 
-  if (window.__lazyFillScannerLoaded) return;
+  console.log('[LazyFill] Scanner module initializing...');
+
   window.__lazyFillScannerLoaded = true;
 
   /* --------------------------------------------------
@@ -294,8 +296,15 @@
    *  MESSAGE LISTENER — Backend triggers scan
    * -------------------------------------------------- */
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message.action === 'SCAN_PAGE') {
+  /* --------------------------------------------------
+   *  CENTRAL MESSAGE LISTENER
+   * -------------------------------------------------- */
+  
+  function handleMessage(message, sender, sendResponse) {
+    const { action, payload } = message;
+
+    // 1. Scanner Actions
+    if (action === 'SCAN_PAGE') {
       try {
         const fields = performScan();
         sendResponse({ success: true, scannedFields: fields, count: fields.length });
@@ -305,7 +314,7 @@
       return true;
     }
 
-    if (message.action === 'GET_FIELD_COUNT') {
+    if (action === 'GET_FIELD_COUNT') {
       try {
         const fields = performScan();
         sendResponse({ success: true, count: fields.length });
@@ -314,11 +323,107 @@
       }
       return true;
     }
-  });
+
+    // 2. Ghost Text Actions (delegated to window.__lazyFillGhostText)
+    if (window.__lazyFillGhostText) {
+      if (action === 'SHOW_GHOST_TEXT') {
+        window.__lazyFillGhostText.showGhostBatch(payload.mappings, payload.scannedFields);
+        sendResponse({ success: true });
+        return true;
+      }
+      if (action === 'CLEAR_GHOST_TEXT') {
+        window.__lazyFillGhostText.clearAllGhosts();
+        sendResponse({ success: true });
+        return true;
+      }
+      if (action === 'GET_GHOST_COUNT') {
+        sendResponse({ success: true, count: window.__lazyFillGhostText.getGhostCount() });
+        return true;
+      }
+      if (action === 'COMMIT_ALL_GHOSTS') {
+        const count = window.__lazyFillGhostText.commitAllVisible();
+        sendResponse({ success: true, committed: count });
+        return true;
+      }
+      if (action === 'COMMIT_ALL_MAPPINGS') {
+        window.__lazyFillGhostText.commitAllMappings(sendResponse);
+        return true;
+      }
+    }
+
+    // 3. Injector Actions
+    if (action === 'FILL_FIELDS') {
+      if (window.__lazyFillInjector) {
+         const res = window.__lazyFillInjector.batchFill(payload.mappings, payload.scannedFields);
+         sendResponse({ success: true, filled: res.filled });
+      } else {
+         sendResponse({ success: false, error: 'Injector not ready' });
+      }
+      return true;
+    }
+  }
+
+  chrome.runtime.onMessage.addListener(handleMessage);
+
+  /**
+   * Robustly find a DOM element based on its scan-time metadata.
+   * Handles ID changes, SPA navigation, and dynamic Google Forms structures.
+   */
+  function resolveElement(fieldMeta, allFields = []) {
+    let root = document;
+
+    // 1. Handle Frame Context
+    if (fieldMeta.frameSelector) {
+      try {
+        const iframe = document.querySelector(fieldMeta.frameSelector);
+        if (iframe?.contentDocument) {
+          root = iframe.contentDocument;
+        }
+      } catch (_) {}
+    }
+
+    // 2. Try by ID (Best)
+    if (fieldMeta.id) {
+      const el = root.getElementById(fieldMeta.id);
+      if (el && el.tagName.toLowerCase() === fieldMeta.tagName) return el;
+    }
+
+    // 3. Try by Name (Standard)
+    if (fieldMeta.name) {
+      const el = root.querySelector(`${fieldMeta.tagName}[name="${CSS.escape(fieldMeta.name)}"]`);
+      if (el) return el;
+    }
+
+    // 4. Try by Aria-Label or Placeholder (Google Forms special)
+    if (fieldMeta.ariaLabel || fieldMeta.placeholder || fieldMeta.label) {
+      const searchTerms = [
+        fieldMeta.ariaLabel ? `[aria-label="${CSS.escape(fieldMeta.ariaLabel)}"]` : null,
+        fieldMeta.placeholder ? `[placeholder="${CSS.escape(fieldMeta.placeholder)}"]` : null,
+        fieldMeta.label ? `[aria-label="${CSS.escape(fieldMeta.label)}"]` : null
+      ].filter(Boolean).join(',');
+
+      if (searchTerms) {
+        const el = root.querySelector(searchTerms);
+        if (el) return el;
+      }
+    }
+
+    // 5. Positional / Index Fallback (Last resort)
+    if (typeof fieldMeta.index === 'number') {
+      const allEls = root.querySelectorAll(FILLABLE_SELECTORS);
+      const filtered = Array.from(allEls).filter(el => {
+        const type = (el.getAttribute('type') || '').toLowerCase();
+        return !EXCLUDED_INPUT_TYPES.has(type);
+      });
+      if (filtered[fieldMeta.index]) return filtered[fieldMeta.index];
+    }
+
+    return null;
+  }
 
   /* --------------------------------------------------
    *  EXPOSE FOR OTHER CONTENT SCRIPTS
    * -------------------------------------------------- */
 
-  window.__lazyFillScanner = { performScan };
+  window.__lazyFillScanner = { performScan, resolveElement };
 })();

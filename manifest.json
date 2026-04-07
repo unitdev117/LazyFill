@@ -7,44 +7,48 @@
     "storage",
     "activeTab",
     "scripting",
-    "tabs"
+    "tabs",
+    "webNavigation"
   ],
   "host_permissions": [
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "<all_urls>"
   ],
   "background": {
-    "service_worker": "backend/service_worker.js",
+    "service_worker": "frontend/dist/background.js",
     "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": [
-        "frontend/scanner.js",
-        "frontend/observer.js",
-        "frontend/event_injector.js",
-        "frontend/ghost_text.js"
+        "frontend/dist/content.js"
       ],
-      "css": ["frontend/content.css"],
+      "css": ["frontend/dist/assets/popup.css"],
       "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_popup": "frontend/popup/popup.html",
+    "default_popup": "frontend/dist/index.html",
     "default_icon": {
-      "16": "frontend/assets/icon16.png",
-      "48": "frontend/assets/icon48.png",
-      "128": "frontend/assets/icon128.png"
+      "16": "frontend/assets/icon16.jpg",
+      "48": "frontend/assets/icon48.jpg",
+      "128": "frontend/assets/icon128.jpg"
     }
   },
   "icons": {
-    "16": "frontend/assets/icon16.png",
-    "48": "frontend/assets/icon48.png",
-    "128": "frontend/assets/icon128.png"
+    "16": "frontend/assets/icon16.jpg",
+    "48": "frontend/assets/icon48.jpg",
+    "128": "frontend/assets/icon128.jpg"
   },
   "web_accessible_resources": [
     {
-      "resources": ["reset.html"],
+      "resources": [
+        "reset.html",
+        "frontend/assets/icon16.jpg",
+        "frontend/assets/icon48.jpg",
+        "frontend/assets/icon128.jpg"
+      ],
       "matches": ["<all_urls>"]
     }
   ]

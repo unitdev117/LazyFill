@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 24 10% 8%;
+    --foreground: 30 15% 98%;
+    --card: 24 10% 11%;
+    --card-foreground: 30 15% 98%;
+    --popover: 24 10% 9%;
+    --popover-foreground: 30 15% 98%;
+    --primary: 250 100% 72%;
+    --primary-foreground: 30 15% 98%;
+    --secondary: 24 8% 18%;
+    --secondary-foreground: 30 15% 98%;
+    --muted: 24 8% 15%;
+    --muted-foreground: 30 10% 60%;
+    --accent: 250 100% 72% / 0.15;
+    --accent-foreground: 250 100% 72%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 24 8% 22%;
+    --input: 24 8% 22%;
+    --ring: 250 100% 72%;
+    --radius: 1.25rem;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+    font-family: 'Sora', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, .font-serif, .font-outfit {
+    font-family: 'Sora', sans-serif;
+    font-weight: 700;
+    tracking: -0.02em;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Custom Blended Scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: linear-gradient(to bottom, transparent, hsl(var(--primary) / 0.3), transparent);
+    border-radius: 10px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--primary) / 0.5);
+  }
+}
