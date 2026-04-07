@@ -24,7 +24,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl overflow-hidden shadow-lg shadow-primary/20 border border-white/10">
             <img 
-              src={chrome.runtime.getURL('frontend/assets/icon48.jpg')} 
+              src={chrome.runtime.getURL('frontend/src/assets/icon48.jpg')} 
               className="w-full h-full object-cover" 
               alt="LazyFill Logo" 
             />

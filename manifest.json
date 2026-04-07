@@ -31,23 +31,23 @@
   "action": {
     "default_popup": "frontend/dist/index.html",
     "default_icon": {
-      "16": "frontend/assets/icon16.jpg",
-      "48": "frontend/assets/icon48.jpg",
-      "128": "frontend/assets/icon128.jpg"
+      "16": "frontend/src/assets/icon16.jpg",
+      "48": "frontend/src/assets/icon48.jpg",
+      "128": "frontend/src/assets/icon128.jpg"
     }
   },
   "icons": {
-    "16": "frontend/assets/icon16.jpg",
-    "48": "frontend/assets/icon48.jpg",
-    "128": "frontend/assets/icon128.jpg"
+    "16": "frontend/src/assets/icon16.jpg",
+    "48": "frontend/src/assets/icon48.jpg",
+    "128": "frontend/src/assets/icon128.jpg"
   },
   "web_accessible_resources": [
     {
       "resources": [
         "reset.html",
-        "frontend/assets/icon16.jpg",
-        "frontend/assets/icon48.jpg",
-        "frontend/assets/icon128.jpg"
+        "frontend/src/assets/icon16.jpg",
+        "frontend/src/assets/icon48.jpg",
+        "frontend/src/assets/icon128.jpg"
       ],
       "matches": ["<all_urls>"]
     }

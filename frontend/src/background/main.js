@@ -11,10 +11,10 @@
  * ============================================================
  */
 
-import SettingsManager from './settings_manager.js';
-import AIController from '../../backend/controllers/ai_controller.js';
-import { handleError } from '../../backend/error_handler.js';
-import db from '../../backend/database/db_adapter.js';
+import SettingsManager from './services/settings.js';
+import AIController from '../../../backend/controllers/ai_controller.js';
+import { handleError } from '../../../backend/error_handler.js';
+import db from '../../../backend/database/db_adapter.js';
 
 /* -------------------------------------------------------
  *  MESSAGE ROUTER — maps action names to handler functions

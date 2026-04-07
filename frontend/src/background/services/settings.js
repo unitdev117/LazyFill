@@ -7,7 +7,7 @@
  * ============================================================
  */
 
-import db from '../../backend/database/db_adapter.js';
+import db from '../../../../backend/database/db_adapter.js';
 
 const SettingsManager = {
   /* --------------------------------------------------
