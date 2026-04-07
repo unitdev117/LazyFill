@@ -365,7 +365,7 @@
     Object.entries(fields).forEach(([key, value]) => addFieldRow(key, value));
   }
 
-  function addFieldRow(key = '', value = '') {
+  function addFieldRow(key = '', value = '', prepend = false) {
     const row = document.createElement('div');
     row.className = 'field-row';
     row.innerHTML = `
@@ -374,10 +374,18 @@
       <button class="icon-btn btn-remove-field" title="Remove">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>`;
-    fieldsList.appendChild(row);
+    
+    if (prepend) {
+      fieldsList.prepend(row);
+      // Auto-focus the key input for better UX when adding new fields
+      const keyInput = row.querySelector('.field-key');
+      if (keyInput) setTimeout(() => keyInput.focus(), 50);
+    } else {
+      fieldsList.appendChild(row);
+    }
   }
 
-  btnAddField.addEventListener('click', () => addFieldRow());
+  btnAddField.addEventListener('click', () => addFieldRow('', '', true));
 
   fieldsList.addEventListener('click', (e) => {
     const removeBtn = e.target.closest('.btn-remove-field');

@@ -38,8 +38,9 @@
         pointer-events: none;
         z-index: 2147483647;
         display: flex;
+        justify-content: flex-end;
         align-items: center;
-        padding: 0 8px;
+        padding: 0 12px;
         box-sizing: border-box;
         overflow: hidden;
         white-space: nowrap;
@@ -63,18 +64,7 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .lazyfill-ghost-tab-hint {
-        font-size: 10px;
-        color: #7c3aed;
-        opacity: 0.7;
-        margin-left: 4px;
-        background: rgba(124, 58, 237, 0.12);
-        border: 1px solid rgba(124, 58, 237, 0.3);
-        border-radius: 3px;
-        padding: 0px 4px;
-        font-family: monospace;
-        flex-shrink: 0;
-      }
+
       @keyframes lazyfill-fadein {
         from { opacity: 0; transform: translateY(-3px); }
         to   { opacity: 1; transform: translateY(0); }
@@ -116,7 +106,6 @@
 
     overlay.innerHTML = `
       <span class="lazyfill-ghost-text">${escapeHtml(suggestion)}</span>
-      <span class="lazyfill-ghost-tab-hint">Tab ↵</span>
     `;
 
     document.body.appendChild(overlay);
