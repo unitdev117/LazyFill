@@ -1,0 +1,15 @@
+
+> lazyfill-frontend@1.1.0 build
+> vite build
+
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32mΓ£ô[39m 11 modules transformed.
+x Build failed in 48ms
+error during build:
+Could not resolve "../../../../util/errors/error_handler.js" from "src/background/main.js"
+file: D:/Code/Projects/LazyFill/frontend/src/background/main.js
+    at getRollupError (file:///D:/Code/Projects/LazyFill/frontend/node_modules/rollup/dist/es/shared/parseAst.js:406:41)
+    at error (file:///D:/Code/Projects/LazyFill/frontend/node_modules/rollup/dist/es/shared/parseAst.js:402:42)
+    at ModuleLoader.handleInvalidResolvedId (file:///D:/Code/Projects/LazyFill/frontend/node_modules/rollup/dist/es/shared/node-entry.js:22106:24)
+    at file:///D:/Code/Projects/LazyFill/frontend/node_modules/rollup/dist/es/shared/node-entry.js:22066:26

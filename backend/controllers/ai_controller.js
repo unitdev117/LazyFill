@@ -9,7 +9,7 @@
  * ============================================================
  */
 
-import { handleError } from '../error_handler.js';
+import { handleError } from '../../util/errors/error_handler.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -40,7 +40,7 @@ const AIController = {
           desc += `\n    DOM Path: ${trunc(f.domPath, 200)}`;
         }
         if (f.surroundingText) {
-          desc += `\n    Context/Surrounding Text: "${trunc(f.surroundingText, 250)}"`;
+          desc += `\n    Context/Surrounding Text: "${trunc(f.surroundingText, 100)}"`;
         }
         if (f.options && f.options.length > 0) {
           // Keep max 20 options safely truncated

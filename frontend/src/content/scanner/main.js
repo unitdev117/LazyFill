@@ -77,7 +77,7 @@
     
     return {
       path: pathFingerprint.reverse().join(' > '),
-      surroundingText: surroundingText ? surroundingText.substring(0, 150) : ''
+      surroundingText: surroundingText ? surroundingText.substring(0, 100) : ''
     };
   }
 

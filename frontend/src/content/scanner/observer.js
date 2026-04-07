@@ -88,7 +88,7 @@
     if (shouldScan) {
       clearTimeout(scanBounceTimer);
       noFieldsPolls = 0; // Reset no-field counter when new nodes appear
-      scanBounceTimer = setTimeout(triggerBackgroundScan, 1000);
+      scanBounceTimer = setTimeout(triggerBackgroundScan, 2500);
     }
   });
 
