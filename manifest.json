@@ -32,15 +32,15 @@
   "action": {
     "default_popup": "frontend/popup/popup.html",
     "default_icon": {
-      "16": "assets/icon16.png",
-      "48": "assets/icon48.png",
-      "128": "assets/icon128.png"
+      "16": "frontend/assets/icon16.png",
+      "48": "frontend/assets/icon48.png",
+      "128": "frontend/assets/icon128.png"
     }
   },
   "icons": {
-    "16": "assets/icon16.png",
-    "48": "assets/icon48.png",
-    "128": "assets/icon128.png"
+    "16": "frontend/assets/icon16.png",
+    "48": "frontend/assets/icon48.png",
+    "128": "frontend/assets/icon128.png"
   },
   "web_accessible_resources": [
     {
