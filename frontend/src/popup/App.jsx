@@ -6,6 +6,10 @@ import { Button } from '@/components/ui/Button';
 import { Layout, User, Settings, Shield, Menu } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+import icon16 from '@/assets/icon16.png';
+import icon48 from '@/assets/icon48.png';
+import icon128 from '@/assets/icon128.png';
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
 
@@ -24,7 +28,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl overflow-hidden shadow-lg shadow-primary/20 border border-white/10">
             <img 
-              src={chrome.runtime.getURL('frontend/dist/assets/icon48.png')} 
+              src={icon48} 
               className="w-full h-full object-cover" 
               alt="LazyFill Logo" 
             />
