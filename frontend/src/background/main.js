@@ -156,11 +156,16 @@ const handlers = {
       return { success: false, error: 'Not configured or disabled' };
     }
 
-    // 2. Optimization Pipeline: Exclude already-filled fields
+    // 1. Pre-calculate THE Form Fingerprint (Stable structure)
+    // We use payload.scannedFields (ALL fields) to ensure the fingerprint is consistent
+    // even if some fields are filled.
+    const fprint = CacheManager.generateFingerprint(payload.scannedFields);
+
+    // 2. Optimization Pipeline: Identify which fields actually need filling
     const emptyFields = FieldFilter.clean(payload.scannedFields);
     const filteredCount = payload.scannedFields.length - emptyFields.length;
     if (filteredCount > 0) {
-      console.log(`[LazyFill] Filtered out ${filteredCount} fields because they already have values.`);
+      console.log(`[LazyFill] Ignoring ${filteredCount} fields that are already filled.`);
     }
 
     if (emptyFields.length === 0) {
@@ -168,59 +173,69 @@ const handlers = {
       return { success: true, count: 0, reason: 'No empty fields' };
     }
 
-    // 3. Optimization Pipeline: Check Cache
-    const fprint = CacheManager.generateFingerprint(emptyFields);
-    const cachedMappings = await CacheManager.get(fprint);
-    if (cachedMappings) {
-      console.log('[LazyFill] ⚡ Cache Hit! Skipping AI call and using remembered mappings.');
+    // 3. Cache Look-up (Assembly Line 2.0)
+    // Get whatever we already know about this form structure
+    const cachedMappings = await CacheManager.get(fprint) || [];
+    if (cachedMappings.length > 0) {
+      console.log(`[LazyFill] ⚡ Cache Hit: Found ${cachedMappings.length} mappings for this form.`);
+    }
+
+    // 4. Gap Detection (Healing)
+    // Find fields that are currently empty but have no mapping in our cache
+    // (This happens if the user manually filled them in a previous session or if new fields appeared)
+    const missingFields = emptyFields.filter(field => 
+      !cachedMappings.some(m => m.index === field.index)
+    );
+
+    // 5. Local Matcher Priority (Instant Healing)
+    const { localMappings, remainingFields } = LocalMatcher.findMatches(missingFields, profile.fields);
+    
+    // Combine Cache + Local Matcher for an "Instant" first-pass
+    let instantMappings = [...cachedMappings, ...localMappings];
+
+    // 6. Instant Local Preview
+    // We send this immediately so the user sees results without waiting for the AI
+    if (instantMappings.length > 0) {
+      console.log(`[LazyFill] 🚀 Sending Instant Preview (${instantMappings.length} fields)`);
       chrome.tabs.sendMessage(tabId, {
         action: 'SHOW_GHOST_TEXT',
-        payload: { mappings: cachedMappings, scannedFields: payload.scannedFields }
+        payload: { mappings: instantMappings, scannedFields: payload.scannedFields }
       }).catch(() => {});
-      return { success: true, fromCache: true, mappings: cachedMappings };
     }
 
-    // 4. Optimization Pipeline: Local Matching
-    const { localMappings, remainingFields } = LocalMatcher.findMatches(emptyFields, profile.fields);
-
-    if (localMappings.length > 0) {
-      console.log(`[LazyFill] 🧩 Local Matcher resolved ${localMappings.length} fields locally (Email/Zip/etc).`);
-    }
-
-    let finalMappings = [...localMappings];
-
-    // 5. Call AI Controller for remaining fields
+    // 7. Background Healing (AI Cycle)
+    // If we still have missing fields, call Gemini to finish the job
     if (remainingFields.length > 0) {
-      console.log(`[LazyFill] 🤖 Calling Gemini AI for the remaining ${remainingFields.length} fields...`);
+      console.log(`[LazyFill] 🤖 Cache is missing ${remainingFields.length} fields. Healing via Gemini AI...`);
       const aiResult = await AIController.generateFill(apiKey, remainingFields, profile.fields, profile.name);
       
       if (aiResult.success && aiResult.mappings) {
-        finalMappings = [...finalMappings, ...aiResult.mappings];
+        // Merge New AI results into our mappings
+        const finalMappings = [...instantMappings, ...aiResult.mappings];
+        
+        // Save the "Healed" cache back for next time
+        await CacheManager.save(fprint, finalMappings);
+
+        // Update UI with the final complete set
+        // Check if a newer scan hijacked us first
+        if (self.__activeBackgroundScans.get(tabId) === currentScanTime) {
+          chrome.tabs.sendMessage(tabId, {
+            action: 'SHOW_GHOST_TEXT',
+            payload: { mappings: finalMappings, scannedFields: payload.scannedFields }
+          }).catch(() => {});
+          console.log(`[LazyFill] ✅ Form "Healed"! Total mappings: ${finalMappings.length}`);
+        }
+        return { success: true, count: finalMappings.length };
       }
+    } else if (localMappings.length > 0) {
+      // If we healed via local matcher, update the cache so we don't even run Local Matcher next time
+      await CacheManager.save(fprint, instantMappings);
+      console.log('[LazyFill] ✅ Form healed locally. Cache updated.');
     } else {
-      console.log('[LazyFill] ✅ Skipping AI call — all fields resolved locally.');
-    }
-    if (finalMappings.length > 0) {
-      await CacheManager.save(fprint, finalMappings);
+      console.log('[LazyFill] ✅ Form fully covered. No AI required.');
     }
 
-    // Check if a newer scan was requested while we were processing
-    if (self.__activeBackgroundScans.get(tabId) !== currentScanTime) {
-       console.log('[LazyFill] Discarding stale scan result (superseded)');
-       return { success: false, error: 'Superseded' };
-    }
-
-    // 7. Push results directly back to content script
-    if (finalMappings.length > 0) {
-      chrome.tabs.sendMessage(tabId, {
-        action: 'SHOW_GHOST_TEXT',
-        payload: { mappings: finalMappings, scannedFields: payload.scannedFields }
-      }).catch(() => {});
-    } else {
-      chrome.tabs.sendMessage(tabId, { action: 'CLEAR_GHOST_TEXT' }).catch(() => {});
-    }
-
-    return { success: true, mappings: finalMappings };
+    return { success: true, mappings: instantMappings };
   },
 
   /* ---- SETTINGS ---- */

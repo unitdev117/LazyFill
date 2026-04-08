@@ -1,0 +1,56 @@
+You are a form autofill assistant. A user has a profile called "General" with the following data:
+
+{
+  "First Name": "John",
+  "Last Name": "Doe",
+  "Email": "john.doe@example.com",
+  "Phone": "+1 555-012-3456",
+  "Address": "123 Main St",
+  "City": "San Francisco",
+  "State": "CA",
+  "Zip Code": "94105",
+  "Country": "USA"
+}
+
+Below are the form fields detected on the current webpage:
+
+[0] tag=<button> type="button" name="Resume_resume" id="Resume_resume" label="Select file - Upload resume" placeholder=""
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.upload-resume > button
+    Context/Surrounding Text: "Select file to upload your resume (DOC, DOCX, PDF, RTF, TXT)"
+[1] tag=<input> type="email" name="Contact_Information_email" id="Contact_Information_email" label="Email *" placeholder="Enter your email address"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.form-group > input
+[2] tag=<input> type="text" name="Contact_Information_firstname" id="Contact_Information_firstname" label="First name *" placeholder="Enter your first name"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.form-group > input
+[3] tag=<input> type="text" name="Contact_Information_lastname" id="Contact_Information_lastname" label="Last name *" placeholder="Enter your last name"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.form-group > input
+[4] tag=<div role="combobox"> type="combobox" name="input-4" id="input-4" label="Phone*" placeholder="Search country code"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.phone-input > div.combobox
+    Context/Surrounding Text: "Phone Number Country Code *"
+    Options: ["+1:United States", "+91:India", "+44:United Kingdom", "+61:Australia"]
+[5] tag=<input> type="text" name="Contact_Information_phone" id="Contact_Information_phone" label="Phone*" placeholder="Enter phone number"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.form-group > input
+[6] tag=<div role="combobox"> type="combobox" name="input-7" id="input-7" label="Country *" placeholder="Select Country"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.form-group > div.combobox
+    Context/Surrounding Text: "Current Residential Country *"
+    Options: ["US:United States", "IN:India", "GB:United Kingdom"]
+[7] tag=<input> type="text" name="Contact_Information_city" id="Contact_Information_city" label="City *" placeholder="City"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.form-group > input
+[8] tag=<div role="combobox"> type="combobox" name="input-10" id="input-10" label="Country of Residence *" placeholder="Select Residence"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.form-group > div.combobox
+[9] tag=<div role="combobox"> type="combobox" name="input-13" id="input-13" label="How did you hear about us? *" placeholder="Select Source"
+    DOM Path: body > div#root > main > div.careers-page > div.apply-section > div.form-group > div.combobox
+    Options: ["LinkedIn:LinkedIn", "Indeed:Indeed", "Referral:Employee Referral"]
+
+TASK:
+Map each form field to the most appropriate profile value using intelligent matching. For modern React frameworks, explicit labels may be missing. You MUST heavily rely on the `DOM Path` hierarchy and `Context/Surrounding Text` structural fingerprints to correctly identify what each field represents.
+
+RULES:
+1. Return ONLY a valid JSON array.
+2. Each element must be: { "index": <number>, "value": "<string>" }
+3. "index" refers to the [N] number in the field list above.
+4. For <select> fields, the "value" must be one of the option values listed.
+5. If no profile data reasonably matches a field, OMIT that field from the output.
+6. Do NOT invent data that is not in the profile.
+7. Do NOT include any explanation — ONLY the JSON array.
+
+OUTPUT:

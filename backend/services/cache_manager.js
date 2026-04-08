@@ -9,19 +9,22 @@
 
 const CacheManager = {
   /**
-   * Generates a stable fingerprint for a form structure.
-   * Uses sorted IDs and names to ensure stability across shifts.
+   * Generates a unique hash for a form based on its structural structure.
+   * This MUST be stable across page refreshes, even if fields are partially filled.
+   * @param {Array} fields — The raw scanned fields (should include ALL fields)
+   * @returns {string} — Fingerprint string
    */
   generateFingerprint(fields) {
     if (!fields || fields.length === 0) return null;
 
-    // Use field IDs and Names as the structural fingerprint
+    // Use stable structural attributes only. 
+    // We EXCLUDE "currentValue" so the fingerprint doesn't change when a user types.
     const structuralKeys = fields
       .map((f) => `${f.id || ''}:${f.name || ''}:${f.tagName}`)
       .sort()
       .join('|');
 
-    // Basic hash representation
+    // Simple robust hash for storage optimization
     return btoa(structuralKeys).substring(0, 32);
   },
 
