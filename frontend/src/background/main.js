@@ -16,6 +16,11 @@ import AIController from '../../../backend/controllers/ai_controller.js';
 import { handleError } from '../../../util/errors/error_handler.js';
 import db from '../../../backend/database/db_adapter.js';
 
+// Optimization Services
+import FieldFilter from '../../../backend/services/field_filter.js';
+import CacheManager from '../../../backend/services/cache_manager.js';
+import LocalMatcher from '../../../backend/services/local_matcher.js';
+
 /* -------------------------------------------------------
  *  MESSAGE ROUTER — maps action names to handler functions
  * ------------------------------------------------------- */
@@ -98,27 +103,38 @@ const handlers = {
   PROCESS_SCAN_RESULTS: async (payload) => {
     const { scannedFields } = payload;
 
-    // 1. Get API key
+    // 1. Get Context
     const apiKey = await SettingsManager.getApiKey();
-    if (!apiKey) {
-      return {
-        success: false,
-        error: { category: 'AUTH_ERROR', message: 'API key not set. Configure it in the popup.' },
-      };
-    }
-
-    // 2. Get active profile
     const profile = await SettingsManager.getActiveProfile();
-    if (!profile) {
-      return {
-        success: false,
-        error: { category: 'VALIDATION_ERROR', message: 'No active profile selected. Choose a profile first.' },
-      };
+    if (!apiKey || !profile) {
+      return { success: false, error: 'Not configured' };
     }
 
-    // 3. Call AI Controller
-    const result = await AIController.generateFill(apiKey, scannedFields, profile.fields, profile.name);
-    return result;
+    // 2. Optimization: Exclude already-filled fields
+    const emptyFields = FieldFilter.clean(scannedFields);
+    if (emptyFields.length === 0) {
+      return { success: true, mappings: [], reason: 'No empty fields' };
+    }
+
+    // 3. Optimization: Local Matching
+    const { localMappings, remainingFields } = LocalMatcher.findMatches(emptyFields, profile.fields);
+    console.log(`[LazyFill] Manual Scan: ${localMappings.length} local matches, ${remainingFields.length} to AI.`);
+
+    let finalMappings = [...localMappings];
+
+    // 4. Call AI for remaining fields
+    if (remainingFields.length > 0) {
+      console.log('[LazyFill] Manual Scan: Requesting AI for complex fields...');
+      const aiResult = await AIController.generateFill(apiKey, remainingFields, profile.fields, profile.name);
+      if (aiResult.success && aiResult.mappings) {
+        finalMappings = [...finalMappings, ...aiResult.mappings];
+      } else if (!aiResult.success) {
+        // If AI fails but we have local matches, we can still return those
+        return aiResult;
+      }
+    }
+
+    return { success: true, mappings: finalMappings };
   },
 
   BACKGROUND_PROCESS_SCAN: async (payload, sender) => {
@@ -130,35 +146,81 @@ const handlers = {
     if (!self.__activeBackgroundScans) self.__activeBackgroundScans = new Map();
     self.__activeBackgroundScans.set(tabId, currentScanTime);
 
-    // Same logic as PROCESS_SCAN_RESULTS, but we intercept and push to UI autonomously
+    // 1. Get User Context
     const apiKey = await SettingsManager.getApiKey();
     const profile = await SettingsManager.getActiveProfile();
     const settings = await SettingsManager.getSettings();
 
     // Do NOT run autonomous scan ONLY if the user has explicitly disabled Ghost Preview
-    if (settings.ghostPreviewEnabled === false || !apiKey || !profile) return { success: false, error: 'Not configured or disabled' };
+    if (settings.ghostPreviewEnabled === false || !apiKey || !profile) {
+      return { success: false, error: 'Not configured or disabled' };
+    }
 
-    const result = await AIController.generateFill(apiKey, payload.scannedFields, profile.fields, profile.name);
-    
-    // Check if a newer scan was requested while Gemini was thinking
+    // 2. Optimization Pipeline: Exclude already-filled fields
+    const emptyFields = FieldFilter.clean(payload.scannedFields);
+    const filteredCount = payload.scannedFields.length - emptyFields.length;
+    if (filteredCount > 0) {
+      console.log(`[LazyFill] Filtered out ${filteredCount} fields because they already have values.`);
+    }
+
+    if (emptyFields.length === 0) {
+      chrome.tabs.sendMessage(tabId, { action: 'CLEAR_GHOST_TEXT' }).catch(() => {});
+      return { success: true, count: 0, reason: 'No empty fields' };
+    }
+
+    // 3. Optimization Pipeline: Check Cache
+    const fprint = CacheManager.generateFingerprint(emptyFields);
+    const cachedMappings = await CacheManager.get(fprint);
+    if (cachedMappings) {
+      console.log('[LazyFill] ⚡ Cache Hit! Skipping AI call and using remembered mappings.');
+      chrome.tabs.sendMessage(tabId, {
+        action: 'SHOW_GHOST_TEXT',
+        payload: { mappings: cachedMappings, scannedFields: payload.scannedFields }
+      }).catch(() => {});
+      return { success: true, fromCache: true, mappings: cachedMappings };
+    }
+
+    // 4. Optimization Pipeline: Local Matching
+    const { localMappings, remainingFields } = LocalMatcher.findMatches(emptyFields, profile.fields);
+
+    if (localMappings.length > 0) {
+      console.log(`[LazyFill] 🧩 Local Matcher resolved ${localMappings.length} fields locally (Email/Zip/etc).`);
+    }
+
+    let finalMappings = [...localMappings];
+
+    // 5. Call AI Controller for remaining fields
+    if (remainingFields.length > 0) {
+      console.log(`[LazyFill] 🤖 Calling Gemini AI for the remaining ${remainingFields.length} fields...`);
+      const aiResult = await AIController.generateFill(apiKey, remainingFields, profile.fields, profile.name);
+      
+      if (aiResult.success && aiResult.mappings) {
+        finalMappings = [...finalMappings, ...aiResult.mappings];
+      }
+    } else {
+      console.log('[LazyFill] ✅ Skipping AI call — all fields resolved locally.');
+    }
+    if (finalMappings.length > 0) {
+      await CacheManager.save(fprint, finalMappings);
+    }
+
+    // Check if a newer scan was requested while we were processing
     if (self.__activeBackgroundScans.get(tabId) !== currentScanTime) {
-       console.log('[LazyFill] Discarding stale AI result (superseded by newer DOM render)');
-       return { success: false, error: 'Superseded by newer scan' };
+       console.log('[LazyFill] Discarding stale scan result (superseded)');
+       return { success: false, error: 'Superseded' };
     }
 
-    // If successful, push mapped results directly back to the active tab's Ghost Text module
-    if (result.success && result.mappings) {
-       if (result.mappings.length > 0) {
-         chrome.tabs.sendMessage(tabId, {
-           action: 'SHOW_GHOST_TEXT',
-           payload: { mappings: result.mappings, scannedFields: payload.scannedFields }
-         }).catch(() => {}); // Catch if tab is closed or not ready
-       } else {
-         chrome.tabs.sendMessage(tabId, { action: 'CLEAR_GHOST_TEXT' }).catch(() => {});
-       }
+    // 7. Push results directly back to content script
+    if (finalMappings.length > 0) {
+      chrome.tabs.sendMessage(tabId, {
+        action: 'SHOW_GHOST_TEXT',
+        payload: { mappings: finalMappings, scannedFields: payload.scannedFields }
+      }).catch(() => {});
+    } else {
+      chrome.tabs.sendMessage(tabId, { action: 'CLEAR_GHOST_TEXT' }).catch(() => {});
     }
 
-    return result;
+    return { success: true, mappings: finalMappings };
   },
 
   /* ---- SETTINGS ---- */
