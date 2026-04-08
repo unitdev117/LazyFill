@@ -8,56 +8,61 @@
  * ============================================================
  */
 
-const MATCH_RULES = [
-  { key: 'Email', patterns: [/email/i, /mail/i] },
-  { key: 'First Name', patterns: [/fname/i, /first.*name/i, /given.*name/i] },
-  { key: 'Last Name', patterns: [/lname/i, /last.*name/i, /family.*name/i, /surname/i] },
-  { key: 'Full Name', patterns: [/^name$/i, /fullname/i, /complete.*name/i] },
-  { key: 'Phone', patterns: [/phone/i, /tel/i, /mobile/i, /contact/i] },
-  { key: 'Zip Code', patterns: [/zip/i, /postal/i, /pincode/i] },
-  { key: 'City', patterns: [/city/i, /town/i, /location/i] },
-  { key: 'State', patterns: [/state/i, /province/i, /region/i] },
-  { key: 'Address', patterns: [/address/i, /street/i, /line1/i] }
-];
-
 const LocalMatcher = {
   /**
-   * Attempts to match fields deterministicly.
-   * @param {Array} fields — Current list of fields
-   * @param {Object} profile — User's active profile data
+   * Attempts to match fields deterministicly based on the user's actual profile keys.
+   * @param {Array} fields — Current list of scanned fields
+   * @param {Object} profileFields — User's active profile data { "First Name": "John", ... }
    * @returns {Object} — { localMappings: Array, remainingFields: Array }
    */
-  findMatches(fields, profile) {
+  findMatches(fields, profileFields) {
     const localMappings = [];
     const remainingFields = [];
+    
+    // Pre-calculate normalized labels from the profile to speed up matching
+    const profileKeys = Object.keys(profileFields).map(key => ({
+      original: key,
+      normalized: key.toLowerCase().replace(/[^a-z0-9]/g, '')
+    }));
 
     fields.forEach((field) => {
       let matchedKey = null;
 
-      // Extract attributes to check
+      // 1. Get a "search blob" of all field attributes
       const attributes = [
         field.id || '',
         field.name || '',
         field.label || '',
         field.placeholder || '',
         field.autocomplete || ''
-      ].map(s => s.toLowerCase());
+      ].map(s => s.toLowerCase().replace(/[^a-z0-9]/g, ''));
 
-      // Check against rules
-      for (const rule of MATCH_RULES) {
-        if (rule.patterns.some(p => attributes.some(attr => p.test(attr)))) {
-          // Verify the key exists in the user's profile
-          if (profile[rule.key]) {
-            matchedKey = rule.key;
-            break;
-          }
+      // 2. Try to match any of the profile's keys against the field's attributes
+      for (const key of profileKeys) {
+        if (!key.normalized) continue;
+
+        // Check for exact match or substring match in any attribute
+        const isMatch = attributes.some(attr => {
+          return attr === key.normalized || 
+                 attr.includes(key.normalized) || 
+                 key.normalized.includes(attr) && attr.length > 3;
+        });
+
+        if (isMatch) {
+          matchedKey = key.original;
+          break;
         }
+      }
+
+      // 3. Fallback: Common industrial aliases if the dynamic label is a standard one
+      if (!matchedKey) {
+        matchedKey = this._checkStandardAliases(attributes, profileFields);
       }
 
       if (matchedKey) {
         localMappings.push({
           index: field.index,
-          value: profile[matchedKey]
+          value: profileFields[matchedKey]
         });
       } else {
         remainingFields.push(field);
@@ -65,6 +70,28 @@ const LocalMatcher = {
     });
 
     return { localMappings, remainingFields };
+  },
+
+  /**
+   * Hardcoded fallbacks for very common web shorthand (e.g. 'fname' -> 'First Name')
+   * only triggered if the profile has that standard key.
+   */
+  _checkStandardAliases(attributes, profileFields) {
+    const aliasRules = [
+      { key: 'First Name', aliases: ['fname', 'givenname'] },
+      { key: 'Last Name', aliases: ['lname', 'surname', 'familyname'] },
+      { key: 'Phone', aliases: ['tel', 'mobile', 'cell', 'contact'] },
+      { key: 'Zip Code', aliases: ['zip', 'postal', 'pincode'] }
+    ];
+
+    for (const rule of aliasRules) {
+      if (profileFields[rule.key]) {
+        if (rule.aliases.some(alias => attributes.some(attr => attr.includes(alias)))) {
+          return rule.key;
+        }
+      }
+    }
+    return null;
   }
 };
 
