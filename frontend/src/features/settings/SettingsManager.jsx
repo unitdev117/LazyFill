@@ -32,9 +32,9 @@ export default function SettingsManager() {
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-xl font-bold tracking-tight">Google Gemini API Key</h2>
+            <h2 className="text-xl font-bold tracking-tight">Google AI API Key</h2>
             <p className="text-[11px] text-muted-foreground px-6 leading-relaxed font-bold">
-              Your key is stored locally and never sent to any server except Google's API.
+              Your key is stored locally and never sent to any server except the API engine.
             </p>
           </div>
 

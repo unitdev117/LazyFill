@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LazyFill — AI Autofill Assistant",
   "version": "1.0.1",
-  "description": "Intelligent AI-powered form autofill using Google Gemini. Create profiles, scan pages, and let AI fill your forms.",
+  "description": "Intelligent AI-powered form autofill using Google AI. Create profiles, scan pages, and let AI fill your forms.",
   "permissions": [
     "storage",
     "activeTab",

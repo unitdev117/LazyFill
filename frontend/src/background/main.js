@@ -204,9 +204,9 @@ const handlers = {
     }
 
     // 7. Background Healing (AI Cycle)
-    // If we still have missing fields, call Gemini to finish the job
+    // If we still have missing fields, call Google AI to finish the job
     if (remainingFields.length > 0) {
-      console.log(`[LazyFill] 🤖 Cache is missing ${remainingFields.length} fields. Healing via Gemini AI...`);
+      console.log(`[LazyFill] 🤖 Cache is missing ${remainingFields.length} fields. Healing via Google AI...`);
       const aiResult = await AIController.generateFill(apiKey, remainingFields, profile.fields, profile.name);
       
       if (aiResult.success && aiResult.mappings) {

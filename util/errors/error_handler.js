@@ -30,7 +30,7 @@ const CATEGORY = Object.freeze({
 });
 
 /**
- * Classify an error from the Gemini API response.
+ * Classify an error from the Google AI API response.
  * @param {number} statusCode
  * @param {Object} body
  * @returns {{ category: string, severity: string, userMessage: string }}
@@ -69,7 +69,7 @@ function classifyApiError(statusCode, body) {
     return {
       category: CATEGORY.API_ERROR,
       severity: SEVERITY.HIGH,
-      userMessage: 'Google Gemini is experiencing issues. Please try again later.',
+      userMessage: 'Google AI is experiencing issues. Please try again later.',
       detail,
     };
   }

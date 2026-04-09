@@ -15,7 +15,7 @@ const SettingsManager = {
    * -------------------------------------------------- */
 
   /**
-   * Save the Gemini API key securely via the DB layer.
+   * Save the Google AI API key securely via the DB layer.
    * @param {string} apiKey
    */
   async saveApiKey(apiKey) {

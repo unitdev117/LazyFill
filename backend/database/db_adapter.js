@@ -36,8 +36,8 @@ class DBAdapter {
    * -------------------------------------------------- */
 
   /**
-   * Store the Google Gemini API key.
-   * @param {string} key  — plaintext Gemini API key
+   * Store the Google AI API key.
+   * @param {string} key  — plaintext AI API key
    * @returns {Promise<void>}
    */
   async saveApiKey(key) {
@@ -60,7 +60,7 @@ class DBAdapter {
     // Auto-migration: detect old AES-GCM encrypted blobs.
     // They look like two base64 chunks joined by ':'
     // e.g. "YWJjZGVm:eHl6YWJj..."  (16+ chars : 32+ chars)
-    // A real Gemini API key starts with "AIza" and has no colon.
+    // A real Google AI API key starts with "AIza" and has no colon.
     if (typeof key === 'string') {
       const colonIdx = key.indexOf(':');
       if (colonIdx > 10 && !key.startsWith('AIza')) {

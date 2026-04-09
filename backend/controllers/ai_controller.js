@@ -1,22 +1,22 @@
 /**
  * ============================================================
- *  AI CONTROLLER — Gemini API Interface
+ *  AI CONTROLLER — Google AI API Interface
  * ============================================================
  *  Exclusively responsible for:
  *    1. Formatting prompts from scanned form data + profile
- *    2. Executing HTTP POST to the Gemini API
+ *    2. Executing HTTP POST to the Google AI API
  *    3. Parsing the structured JSON response
  * ============================================================
  */
 
 import { handleError } from '../../util/errors/error_handler.js';
 
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GOOGLE_AI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 // Model priority list — tries each in order until one succeeds.
-// gemini-2.5-flash is the current stable model.
-// gemini-3-flash-preview is the latest preview if 2.5 is not available.
-const MODELS = ['gemini-2.5-flash', 'gemini-3-flash-preview'];
+// gemma-4-26b is the primary model.
+// gemma-3 models are used as high-efficiency fallbacks.
+const MODELS = ['gemma-4-26b', 'gemma-3-4b', 'gemma-3-1b'];
 
 const AIController = {
   /**
@@ -81,13 +81,13 @@ OUTPUT:`;
   },
 
   /**
-   * Send the prompt to Gemini and parse the response.
+   * Send the prompt to Google AI and parse the response.
    * Tries each model in the MODELS list; falls back on 404.
    * @param {string} apiKey
    * @param {string} prompt
    * @returns {Promise<{ success: boolean, mappings?: Array, error?: Object }>}
    */
-  async callGemini(apiKey, prompt) {
+  async callAI(apiKey, prompt) {
     const cleanApiKey = apiKey ? apiKey.trim() : '';
 
     // Guard: catch empty key BEFORE making the request
@@ -97,7 +97,7 @@ OUTPUT:`;
         error: {
           category: 'AUTH_ERROR',
           severity: 'high',
-          message: 'API key is missing or invalid. Please go to Settings and re-enter your Gemini API key.',
+          message: 'API key is missing or invalid. Please go to Settings and re-enter your Google AI API key.',
         },
       };
     }
@@ -119,8 +119,8 @@ OUTPUT:`;
 
     // Try each model in priority order
     for (const model of MODELS) {
-      const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${cleanApiKey}`;
-      console.log(`[LazyFill] Trying Gemini model: ${model}`);
+      const url = `${GOOGLE_AI_BASE}/${model}:generateContent?key=${cleanApiKey}`;
+      console.log(`[LazyFill] Trying Google AI model: ${model}`);
 
       let response;
       try {
@@ -150,7 +150,7 @@ OUTPUT:`;
         } catch (_) {}
         return handleError(
           { statusCode: response.status, body },
-          `ai_controller.callGemini.response (${model})`
+          `ai_controller.callAI.response (${model})`
         );
       }
 
@@ -177,15 +177,15 @@ OUTPUT:`;
 
         return handleError(
           { statusCode: 200, body: { error: { message: `Failed to parse AI response: ${textContent.slice(0, 300)}` } } },
-          'ai_controller.callGemini.parse'
+          'ai_controller.callAI.parse'
         );
       }
     }
 
     // All models failed
     return handleError(
-      lastError || new Error('All Gemini models failed.'),
-      'ai_controller.callGemini.allModelsFailed'
+      lastError || new Error('All Google AI models failed.'),
+      'ai_controller.callAI.allModelsFailed'
     );
   },
 
@@ -219,7 +219,7 @@ OUTPUT:`;
     }
 
     const prompt = this.buildPrompt(scannedFields, profileFields, profileName);
-    return this.callGemini(apiKey, prompt);
+    return this.callAI(apiKey, prompt);
   },
 };
 
