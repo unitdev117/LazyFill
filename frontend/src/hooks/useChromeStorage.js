@@ -30,9 +30,11 @@ export function useChromeStorage(key, initialValue) {
   }, [key]);
 
   const setStorageState = (value) => {
-    const valueToStore = value instanceof Function ? value(state) : value;
-    setState(valueToStore);
-    chrome.storage.local.set({ [key]: valueToStore });
+    setState((prev) => {
+      const newValue = value instanceof Function ? value(prev) : value;
+      chrome.storage.local.set({ [key]: newValue });
+      return newValue;
+    });
   };
 
   return [state, setStorageState, isLoaded];

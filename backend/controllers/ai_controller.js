@@ -19,6 +19,47 @@ const GOOGLE_AI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 const MODELS = ['gemma-4-26b', 'gemma-3-4b', 'gemma-3-1b'];
 
 const AIController = {
+  _getPromptFields(scannedFields) {
+    return (scannedFields || []).slice(0, 30);
+  },
+
+  _getPromptIndex(field, fallbackIndex) {
+    return typeof field?.index === 'number' ? field.index : fallbackIndex;
+  },
+
+  _normalizeMappings(mappings, scannedFields) {
+    if (!Array.isArray(mappings)) return [];
+
+    const promptFields = this._getPromptFields(scannedFields);
+    const promptIndices = promptFields.map((field, idx) => this._getPromptIndex(field, idx));
+    const validIndices = new Set(promptIndices);
+
+    return mappings
+      .map((mapping) => {
+        if (!mapping || typeof mapping !== 'object') return null;
+
+        let normalizedIndex = mapping.index;
+        if (
+          !validIndices.has(normalizedIndex) &&
+          Number.isInteger(normalizedIndex) &&
+          normalizedIndex >= 0 &&
+          normalizedIndex < promptFields.length
+        ) {
+          normalizedIndex = promptIndices[normalizedIndex];
+        }
+
+        if (!validIndices.has(normalizedIndex)) {
+          return null;
+        }
+
+        return {
+          index: normalizedIndex,
+          value: mapping.value,
+        };
+      })
+      .filter((mapping) => mapping && typeof mapping.value === 'string');
+  },
+
   /**
    * Build the prompt that maps scanned form fields to profile data.
    * @param {Array}  scannedFields  — [ { id, name, type, label, placeholder, tagName, options? } ]
@@ -31,11 +72,12 @@ const AIController = {
     const trunc = (str, len = 150) => (str && str.length > len ? str.substring(0, len) + '...' : str);
 
     // CRITICAL GUARANTEE: Never send the whole HTML. Send a maximum of 30 parsed input values only.
-    const safeScannedFields = scannedFields.slice(0, 30);
+    const safeScannedFields = this._getPromptFields(scannedFields);
 
     const fieldDescriptions = safeScannedFields
       .map((f, i) => {
-        let desc = `[${i}] tag=<${f.tagName}> type="${f.type || ''}" name="${trunc(f.name) || ''}" id="${trunc(f.id, 50) || ''}" label="${trunc(f.label, 300) || ''}" placeholder="${trunc(f.placeholder) || ''}"`;
+        const promptIndex = this._getPromptIndex(f, i);
+        let desc = `[${promptIndex}] tag=<${f.tagName}> type="${f.type || ''}" name="${trunc(f.name) || ''}" id="${trunc(f.id, 50) || ''}" label="${trunc(f.label, 300) || ''}" placeholder="${trunc(f.placeholder) || ''}"`;
         if (f.domPath) {
           desc += `\n    DOM Path: ${trunc(f.domPath, 200)}`;
         }
@@ -74,8 +116,10 @@ RULES:
 3. "index" refers to the [N] number in the field list above.
 4. For <select> fields, the "value" must be one of the option values listed.
 5. If no profile data reasonably matches a field, OMIT that field from the output.
-6. Do NOT invent data that is not in the profile.
-7. Do NOT include any explanation — ONLY the JSON array.
+6. SECURITY/ACCURACY RULE: Do NOT map numeric IDs, account numbers, or bill numbers to common text fields like "City", "Name", or "Address" unless the profile key explicitly contains those words.
+7. If in doubt, omit the field. It is better to leave it empty than to fill it with incorrect data.
+8. Do NOT invent data that is not in the profile.
+9. Do NOT include any explanation — ONLY the JSON array.
 
 OUTPUT:`;
   },
@@ -219,7 +263,15 @@ OUTPUT:`;
     }
 
     const prompt = this.buildPrompt(scannedFields, profileFields, profileName);
-    return this.callAI(apiKey, prompt);
+    const aiResult = await this.callAI(apiKey, prompt);
+    if (!aiResult.success || !aiResult.mappings) {
+      return aiResult;
+    }
+
+    return {
+      success: true,
+      mappings: this._normalizeMappings(aiResult.mappings, scannedFields),
+    };
   },
 };
 

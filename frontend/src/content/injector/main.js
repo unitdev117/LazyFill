@@ -209,6 +209,28 @@
     el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
   }
 
+  /**
+   * Dispatches a more standard sequence for modern inputs.
+   */
+  function dispatchModernEvents(el, value) {
+    el.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+    el.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    
+    // Some frameworks need the value to be set BEFORE the input event
+    // but we already do that in setFieldValue.
+    
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      data: value,
+      inputType: 'insertText'
+    }));
+    
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+  }
+
   /* --------------------------------------------------
    *  FIELD SETTER — set value using native setter
    * -------------------------------------------------- */
@@ -254,6 +276,7 @@
 
       // Dispatch events
       dispatchKeyboardEvents(el, value);
+      dispatchModernEvents(el, value);
 
       // Visual feedback — brief highlight
       addFillAnimation(el);

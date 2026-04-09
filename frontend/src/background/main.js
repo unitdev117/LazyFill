@@ -21,6 +21,81 @@ import FieldFilter from '../../../backend/services/field_filter.js';
 import CacheManager from '../../../backend/services/cache_manager.js';
 import LocalMatcher from '../../../backend/services/local_matcher.js';
 
+function normalizeIntentText(value) {
+  return (value || '').toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+}
+
+function detectIntent(text) {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) return null;
+
+  const intentRules = [
+    { intent: 'email', pattern: /\b(e ?mail|email)\b/ },
+    { intent: 'phone', pattern: /\b(phone|mobile|cell|telephone|tel|contact number)\b/ },
+    { intent: 'city', pattern: /\b(city|town|locality)\b/ },
+    { intent: 'state', pattern: /\b(state|province|region|county)\b/ },
+    { intent: 'zip', pattern: /\b(zip|postal|postcode|pincode)\b/ },
+    { intent: 'country', pattern: /\b(country|nationality)\b/ },
+    { intent: 'address', pattern: /\b(address|street|address line)\b/ },
+    { intent: 'first_name', pattern: /\b(first name|given name|forename|fname)\b/ },
+    { intent: 'last_name', pattern: /\b(last name|surname|family name|lname)\b/ },
+    { intent: 'full_name', pattern: /\b(full name|name)\b/ },
+  ];
+
+  const match = intentRules.find((rule) => rule.pattern.test(normalized));
+  return match ? match.intent : null;
+}
+
+function getFieldIntent(field) {
+  if (!field) return null;
+
+  return detectIntent([
+    field.label,
+    field.placeholder,
+    field.ariaLabel,
+    field.autocomplete,
+    field.name,
+    field.id,
+  ].join(' '));
+}
+
+function getProfileKeyIntent(profileKey) {
+  return detectIntent(profileKey);
+}
+
+function getMatchingProfileKeyIntents(mapping, profileFields) {
+  if (mapping.profileKey) {
+    const intent = getProfileKeyIntent(mapping.profileKey);
+    return intent ? [intent] : [];
+  }
+
+  const matchedKeys = Object.entries(profileFields)
+    .filter(([, value]) => value === mapping.value)
+    .map(([key]) => getProfileKeyIntent(key))
+    .filter(Boolean);
+
+  return [...new Set(matchedKeys)];
+}
+
+function filterMappingsByIntent(mappings, scannedFields, profileFields) {
+  if (!Array.isArray(mappings)) return [];
+
+  return mappings.filter((mapping) => {
+    if (!mapping || typeof mapping.index !== 'number') return false;
+
+    const field = scannedFields[mapping.index];
+    if (!field) return false;
+
+    const fieldIntent = getFieldIntent(field);
+    if (!fieldIntent) return true;
+
+    const profileKeyIntents = getMatchingProfileKeyIntents(mapping, profileFields);
+    if (profileKeyIntents.length === 0) return true;
+
+    return profileKeyIntents.includes(fieldIntent);
+  });
+}
+
 /* -------------------------------------------------------
  *  MESSAGE ROUTER — maps action names to handler functions
  * ------------------------------------------------------- */
@@ -120,14 +195,18 @@ const handlers = {
     const { localMappings, remainingFields } = LocalMatcher.findMatches(emptyFields, profile.fields);
     console.log(`[LazyFill] Manual Scan: ${localMappings.length} local matches, ${remainingFields.length} to AI.`);
 
-    let finalMappings = [...localMappings];
+    let finalMappings = filterMappingsByIntent(localMappings, scannedFields, profile.fields);
 
     // 4. Call AI for remaining fields
     if (remainingFields.length > 0) {
       console.log('[LazyFill] Manual Scan: Requesting AI for complex fields...');
       const aiResult = await AIController.generateFill(apiKey, remainingFields, profile.fields, profile.name);
       if (aiResult.success && aiResult.mappings) {
-        finalMappings = [...finalMappings, ...aiResult.mappings];
+        finalMappings = filterMappingsByIntent(
+          [...finalMappings, ...aiResult.mappings],
+          scannedFields,
+          profile.fields
+        );
       } else if (!aiResult.success) {
         // If AI fails but we have local matches, we can still return those
         return aiResult;
@@ -175,7 +254,12 @@ const handlers = {
 
     // 3. Cache Look-up (Assembly Line 2.0)
     // Get whatever we already know about this form structure
-    const cachedMappings = await CacheManager.get(fprint) || [];
+    const rawCachedMappings = await CacheManager.get(fprint) || [];
+    const cachedMappings = filterMappingsByIntent(
+      CacheManager.reconcileMappings(rawCachedMappings, payload.scannedFields),
+      payload.scannedFields,
+      profile.fields
+    );
     if (cachedMappings.length > 0) {
       console.log(`[LazyFill] ⚡ Cache Hit: Found ${cachedMappings.length} mappings for this form.`);
     }
@@ -191,7 +275,11 @@ const handlers = {
     const { localMappings, remainingFields } = LocalMatcher.findMatches(missingFields, profile.fields);
     
     // Combine Cache + Local Matcher for an "Instant" first-pass
-    let instantMappings = [...cachedMappings, ...localMappings];
+    let instantMappings = filterMappingsByIntent(
+      [...cachedMappings, ...localMappings],
+      payload.scannedFields,
+      profile.fields
+    );
 
     // 6. Instant Local Preview
     // We send this immediately so the user sees results without waiting for the AI
@@ -211,10 +299,14 @@ const handlers = {
       
       if (aiResult.success && aiResult.mappings) {
         // Merge New AI results into our mappings
-        const finalMappings = [...instantMappings, ...aiResult.mappings];
+        const finalMappings = filterMappingsByIntent(
+          [...instantMappings, ...aiResult.mappings],
+          payload.scannedFields,
+          profile.fields
+        );
         
         // Save the "Healed" cache back for next time
-        await CacheManager.save(fprint, finalMappings);
+        await CacheManager.save(fprint, finalMappings, payload.scannedFields);
 
         // Update UI with the final complete set
         // Check if a newer scan hijacked us first
@@ -229,7 +321,7 @@ const handlers = {
       }
     } else if (localMappings.length > 0) {
       // If we healed via local matcher, update the cache so we don't even run Local Matcher next time
-      await CacheManager.save(fprint, instantMappings);
+      await CacheManager.save(fprint, instantMappings, payload.scannedFields);
       console.log('[LazyFill] ✅ Form healed locally. Cache updated.');
     } else {
       console.log('[LazyFill] ✅ Form fully covered. No AI required.');
@@ -402,8 +494,27 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   // Always run storage migration on install/update
   try {
     await SettingsManager.getApiKey(); // triggers auto-migration in db_adapter
+    await purgeOldCache();
   } catch (_) {}
 });
+
+/**
+ * Identify and remove legacy v1 cache keys from storage.
+ */
+async function purgeOldCache() {
+  const all = await chrome.storage.local.get(null);
+  const keysToRemove = Object.keys(all).filter(
+    (k) =>
+      k.startsWith('cache_fprint_') ||
+      k.startsWith('cache_v2_fprint_') ||
+      k.startsWith('cache_v3_fprint_')
+  );
+  if (keysToRemove.length > 0) {
+    console.log(`[LazyFill] Purging ${keysToRemove.length} legacy cache entries.`);
+    await chrome.storage.local.remove(keysToRemove);
+  }
+}
+
 
 /* -------------------------------------------------------
  *  STARTUP — self-healing storage check on every wake-up
@@ -413,6 +524,7 @@ self.addEventListener('activate', async () => {
   try {
     // Triggers auto-migration: detects & wipes old encrypted blobs
     await SettingsManager.getApiKey();
+    await purgeOldCache();
     console.log('[LazyFill] Storage check passed.');
   } catch (err) {
     console.warn('[LazyFill] Storage check failed (non-fatal):', err.message);

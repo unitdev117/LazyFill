@@ -69,7 +69,7 @@ export default function ProfileManager() {
             >
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-2xl bg-primary/20 flex items-center justify-center text-primary font-bold text-lg shadow-inner">
-                  {p.name.slice(0, 2).toUpperCase()}
+                  {(p.name || '??').slice(0, 2).toUpperCase()}
                 </div>
                 <div>
                   <h3 className="font-bold text-base leading-tight">{p.name}</h3>
@@ -109,7 +109,7 @@ export default function ProfileManager() {
 }
 
 function ProfileEditor({ profile, onSave, onCancel }) {
-  const [name, setName] = useState(profile.name);
+  const [name, setName] = useState(profile?.name || '');
   // Separate UI state for fields to use stable IDs for React keys
   const [fields, setFields] = useState(() => 
     Object.entries(profile.fields || {}).map(([key, value]) => ({

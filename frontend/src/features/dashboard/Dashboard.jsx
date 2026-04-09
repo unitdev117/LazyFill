@@ -131,12 +131,14 @@ export function Dashboard() {
       setStats({ found: scanRes.count, fillable: fillRes?.filled || 0 });
 
     } catch (err) {
-      console.error(err);
+      console.error('[LazyFill] Dashboard Error:', err);
+      const errMsg = err?.message || err?.toString() || 'Unknown error';
+      
       // More user-friendly error if content script is missing
-      if (err.message?.includes('Could not establish connection')) {
+      if (errMsg.includes('Could not establish connection')) {
         setStatus({ state: 'error', message: 'Refresh the page to sync' });
       } else {
-        setStatus({ state: 'error', message: err.message.split('.')[0] });
+        setStatus({ state: 'error', message: errMsg.split('.')[0] });
       }
     } finally {
       setIsProcessing(false);

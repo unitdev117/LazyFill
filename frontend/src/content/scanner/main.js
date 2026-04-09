@@ -303,23 +303,31 @@
   function findLabel(el) {
     const doc = el.ownerDocument || document;
 
-    // 1. Standard: <label for="id">
-    if (el.id) {
-      const label = doc.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      if (label) return label.textContent.trim();
+    const GENERIC_LABELS = new Set([
+      'your answer',
+      'enter text',
+      'type here',
+      'placeholder',
+      'answer',
+      'input',
+      'your name', /* sometimes used as generic placeholder */
+    ]);
+
+    // 1. Google Forms support (High Priority)
+    // Google Forms question titles are typically in .M7eMe elements or have role="heading"
+    // They are siblings or cousins of the input's container.
+    const gFormContainer = el.closest('.geS5n') || el.closest('[role="listitem"]') || el.closest('.M7eMe')?.parentElement;
+    if (gFormContainer) {
+      const gTitle = gFormContainer.querySelector('.M7eMe') || 
+                     gFormContainer.querySelector('[role="heading"]') ||
+                     gFormContainer.querySelector('.Ho8CH');
+      if (gTitle) {
+        const text = gTitle.textContent.trim();
+        if (text && !GENERIC_LABELS.has(text.toLowerCase())) return text;
+      }
     }
 
-    // 2. Enterprise pattern: label with id = inputId + "_label" (Eightfold AI, Workday)
-    if (el.id) {
-      const suffixLabel = doc.getElementById(el.id + '_label');
-      if (suffixLabel) return suffixLabel.textContent.trim();
-    }
-
-    // 3. aria-label attribute directly on the element
-    const ariaLabel = el.getAttribute('aria-label');
-    if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim();
-
-    // 4. aria-labelledby (can reference multiple IDs)
+    // 2. aria-labelledby (can reference multiple IDs)
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
       const ids = labelledBy.split(/\s+/);
@@ -327,33 +335,59 @@
       for (const id of ids) {
         if (!id) continue;
         const labelEl = doc.getElementById(id);
-        if (labelEl) combinedLabel += labelEl.textContent.trim() + ' ';
+        if (labelEl) {
+          const text = labelEl.textContent.trim();
+          if (text && !GENERIC_LABELS.has(text.toLowerCase())) {
+            combinedLabel += text + ' ';
+          }
+        }
       }
       if (combinedLabel.trim()) return combinedLabel.trim();
     }
 
-    // 5. Parent <label> wrapping the input
+    // 3. Standard: <label for="id">
+    if (el.id) {
+      const label = doc.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (label) {
+        const text = label.textContent.trim();
+        if (text && !GENERIC_LABELS.has(text.toLowerCase())) return text;
+      }
+    }
+
+    // 4. Enterprise pattern: label with id = inputId + "_label" (Eightfold AI, Workday)
+    if (el.id) {
+      const suffixLabel = doc.getElementById(el.id + '_label');
+      if (suffixLabel) {
+        const text = suffixLabel.textContent.trim();
+        if (text && !GENERIC_LABELS.has(text.toLowerCase())) return text;
+      }
+    }
+
+    // 5. aria-label attribute directly on the element
+    const ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel && ariaLabel.trim()) {
+      const text = ariaLabel.trim();
+      if (!GENERIC_LABELS.has(text.toLowerCase())) return text;
+    }
+
+    // 6. Parent <label> wrapping the input
     const parentLabel = el.closest('label');
     if (parentLabel) {
       const clone = parentLabel.cloneNode(true);
       const childInput = clone.querySelector(TEXT_ENTRY_SELECTOR);
       if (childInput) childInput.remove();
       const text = clone.textContent.trim();
-      if (text) return text;
+      if (text && !GENERIC_LABELS.has(text.toLowerCase())) return text;
     }
 
-    // 6. Fieldset > legend (phone groups, address groups)
+    // 7. Fieldset > legend (phone groups, address groups)
     const fieldset = el.closest('fieldset');
     if (fieldset) {
       const legend = fieldset.querySelector('legend');
-      if (legend) return legend.textContent.trim();
-    }
-
-    // 7. Google Forms support
-    const gFormContainer = el.closest('.geS5n') || el.closest('[role="listitem"]');
-    if (gFormContainer) {
-      const gTitle = gFormContainer.querySelector('.M7eMe') || gFormContainer.querySelector('[role="heading"]');
-      if (gTitle) return gTitle.textContent.trim();
+      if (legend) {
+        const text = legend.textContent.trim();
+        if (text && !GENERIC_LABELS.has(text.toLowerCase())) return text;
+      }
     }
 
     // 8. Previous sibling: label, span, p, div, h-tags
@@ -362,7 +396,7 @@
       const tag = prev.tagName;
       if (tag === 'LABEL' || tag === 'SPAN' || tag === 'P' || tag === 'DIV' || tag === 'H3' || tag === 'H4') {
         const text = prev.textContent.trim();
-        if (text && text.length < 200) return text;
+        if (text && text.length < 200 && !GENERIC_LABELS.has(text.toLowerCase())) return text;
       }
     }
 
@@ -373,14 +407,14 @@
       const label = parent.querySelector(':scope > label, :scope > span.label, :scope > legend');
       if (label && !label.querySelector(TEXT_ENTRY_SELECTOR)) {
         const text = label.textContent.trim();
-        if (text && text.length < 200) return text;
+        if (text && text.length < 200 && !GENERIC_LABELS.has(text.toLowerCase())) return text;
       }
       parent = parent.parentElement;
     }
 
     // 10. Fallback: use placeholder or name as the label hint
     const placeholder = el.getAttribute('placeholder') || el.getAttribute('aria-placeholder') || '';
-    if (placeholder && placeholder !== 'Your answer' && placeholder !== 'Select') return placeholder;
+    if (placeholder && !GENERIC_LABELS.has(placeholder.toLowerCase()) && placeholder !== 'Select') return placeholder;
 
     return '';
   }
@@ -561,7 +595,7 @@
       }
     }
 
-    // 4. Try by Aria-Label or Placeholder (Google Forms special)
+    // 4. Try by Aria-Label, Placeholder, or Label Text (Google Forms / enterprise support)
     if (fieldMeta.ariaLabel || fieldMeta.placeholder || fieldMeta.label) {
       const searchTerms = [
         fieldMeta.ariaLabel ? `[aria-label="${CSS.escape(fieldMeta.ariaLabel)}"]` : null,
@@ -569,10 +603,30 @@
         fieldMeta.label ? `[aria-label="${CSS.escape(fieldMeta.label)}"]` : null
       ].filter(Boolean).join(',');
 
+      let el = null;
       if (searchTerms) {
         const candidates = root.querySelectorAll(searchTerms);
-        const el = Array.from(candidates).find((candidate) => matchesResolvedField(candidate, fieldMeta));
-        if (el) return el;
+        el = Array.from(candidates).find((candidate) => matchesResolvedField(candidate, fieldMeta));
+      }
+      if (el) return el;
+
+      // 4b. Deep search for aria-labelledby matches
+      if (fieldMeta.label) {
+        const allTextInputs = root.querySelectorAll(TEXT_ENTRY_SELECTOR);
+        for (const input of allTextInputs) {
+          if (!matchesResolvedField(input, fieldMeta)) continue;
+          
+          const labelledBy = input.getAttribute('aria-labelledby');
+          if (labelledBy) {
+            const labelTexts = labelledBy.split(/\s+/)
+              .map(id => root.getElementById(id)?.textContent?.trim())
+              .filter(Boolean);
+            
+            if (labelTexts.some(t => t.includes(fieldMeta.label) || fieldMeta.label.includes(t))) {
+              return input;
+            }
+          }
+        }
       }
     }
 

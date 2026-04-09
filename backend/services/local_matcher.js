@@ -9,6 +9,40 @@
  */
 
 const LocalMatcher = {
+  _normalizeAttribute(value) {
+    return (value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  },
+
+  /**
+   * Calculates similarity between two strings (Sørensen–Dice coefficient)
+   * Returns value between 0 and 1.
+   */
+  calculateSimilarity(str1, str2) {
+    const s1 = this._normalizeAttribute(str1);
+    const s2 = this._normalizeAttribute(str2);
+    
+    if (s1 === s2) return 1.0;
+    if (s1.length < 2 || s2.length < 2) return s1 === s2 ? 1.0 : 0.0;
+
+    const getBigrams = (s) => {
+      const bigrams = new Set();
+      for (let i = 0; i < s.length - 1; i++) {
+        bigrams.add(s.substring(i, i + 2));
+      }
+      return bigrams;
+    };
+
+    const bigrams1 = getBigrams(s1);
+    const bigrams2 = getBigrams(s2);
+    let intersect = 0;
+
+    for (const b of bigrams1) {
+      if (bigrams2.has(b)) intersect++;
+    }
+
+    return (2.0 * intersect) / (bigrams1.size + bigrams2.size);
+  },
+
   _isPureTextField(field) {
     if (!field || typeof field !== 'object') return false;
 
@@ -87,25 +121,44 @@ const LocalMatcher = {
       }
 
       let matchedKey = null;
+      const isLongFormText = field.tagName === 'textarea' || field.tagName === 'contenteditable';
 
-      // 1. Get a "search blob" of all field attributes
-      const attributes = [
-        field.id || '',
-        field.name || '',
+      // Favor user-visible cues for long-form fields so hidden IDs/names cannot override a clear label.
+      const visibleAttributes = [
         field.label || '',
         field.placeholder || '',
+        field.ariaLabel || '',
+      ]
+        .map((s) => this._normalizeAttribute(s))
+        .filter(Boolean);
+
+      const machineAttributes = [
+        field.id || '',
+        field.name || '',
         field.autocomplete || ''
-      ].map(s => s.toLowerCase().replace(/[^a-z0-9]/g, ''));
+      ]
+        .map((s) => this._normalizeAttribute(s))
+        .filter(Boolean);
+
+      const attributes = isLongFormText
+        ? visibleAttributes
+        : [...visibleAttributes, ...machineAttributes];
 
       // 2. Try to match any of the profile's keys against the field's attributes
       for (const key of profileKeys) {
         if (!key.normalized) continue;
 
-        // Check for exact match or substring match in any attribute
+        // Keep long-form fields conservative: only exact visible-label matches should resolve locally.
         const isMatch = attributes.some(attr => {
-          return attr === key.normalized || 
-                 attr.includes(key.normalized) || 
-                 key.normalized.includes(attr) && attr.length > 3;
+          if (attr === key.normalized) return true;
+
+          if (isLongFormText) return false;
+          
+          const score = this.calculateSimilarity(key.normalized, attr);
+          
+          // Minimum threshold for local matching (high confidence only)
+          // We also ensure the attribute isn't just a tiny substring of a long key
+          return score > 0.8 && (attr.length / key.normalized.length) > 0.4;
         });
 
         if (isMatch) {
@@ -122,6 +175,7 @@ const LocalMatcher = {
       if (matchedKey) {
         localMappings.push({
           index: field.index,
+          profileKey: matchedKey,
           value: profileFields[matchedKey]
         });
       } else {
