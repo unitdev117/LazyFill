@@ -9,6 +9,62 @@
  */
 
 const LocalMatcher = {
+  _isPureTextField(field) {
+    if (!field || typeof field !== 'object') return false;
+
+    const tagName = (field.tagName || '').toLowerCase();
+    const type = (field.type || '').toLowerCase();
+    const role = (field.role || '').toLowerCase();
+    const placeholder = (field.placeholder || '').trim().toLowerCase();
+    const domPath = (field.domPath || '').toLowerCase();
+
+    const allowedInputTypes = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password']);
+    const disallowedTags = new Set(['select', 'option', 'optgroup', 'datalist']);
+    const disallowedRoles = new Set([
+      'combobox',
+      'listbox',
+      'option',
+      'menu',
+      'menuitem',
+      'tree',
+      'treeitem',
+      'grid',
+      'button',
+      'checkbox',
+      'radio',
+      'switch',
+      'tab',
+      'slider',
+      'spinbutton',
+    ]);
+
+    if (disallowedTags.has(tagName) || disallowedRoles.has(role)) {
+      return false;
+    }
+
+    if (field.hasListAttribute) {
+      return false;
+    }
+
+    if (/^(select|choose)\b/.test(placeholder)) {
+      return false;
+    }
+
+    if (/\b(dropdown|picker|autocomplete|combo-?box|select-?input|select-?module)\b/.test(domPath)) {
+      return false;
+    }
+
+    if (tagName === 'textarea' || tagName === 'contenteditable') {
+      return true;
+    }
+
+    if (tagName === 'input') {
+      return allowedInputTypes.has(type);
+    }
+
+    return false;
+  },
+
   /**
    * Attempts to match fields deterministicly based on the user's actual profile keys.
    * @param {Array} fields — Current list of scanned fields
@@ -26,6 +82,10 @@ const LocalMatcher = {
     }));
 
     fields.forEach((field) => {
+      if (!this._isPureTextField(field)) {
+        return;
+      }
+
       let matchedKey = null;
 
       // 1. Get a "search blob" of all field attributes

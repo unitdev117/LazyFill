@@ -19,7 +19,20 @@
   if (window.__lazyFillObserverLoaded) return;
   window.__lazyFillObserverLoaded = true;
 
-  const FILLABLE_SELECTORS = 'input, textarea, select, [contenteditable="true"], [role="textbox"], [role="combobox"]';
+  const TEXT_ENTRY_SELECTOR = [
+    'input:not([type])',
+    'input[type="text" i]',
+    'input[type="search" i]',
+    'input[type="email" i]',
+    'input[type="url" i]',
+    'input[type="tel" i]',
+    'input[type="password" i]',
+    'textarea',
+    '[contenteditable=""]',
+    '[contenteditable="true"]',
+    '[contenteditable="plaintext-only"]',
+    '[role="textbox"]',
+  ].join(', ');
   let scanBounceTimer = null;
   let lastScanFingerprint = '';
 
@@ -74,9 +87,9 @@
       if (m.addedNodes.length > 0) {
         for (const node of m.addedNodes) {
           if (node.nodeType === 1) {
-            if (node.matches && node.matches(FILLABLE_SELECTORS)) {
+            if (node.matches && node.matches(TEXT_ENTRY_SELECTOR)) {
               shouldScan = true; break;
-            } else if (node.querySelector && node.querySelector(FILLABLE_SELECTORS)) {
+            } else if (node.querySelector && node.querySelector(TEXT_ENTRY_SELECTOR)) {
               shouldScan = true; break;
             }
           }

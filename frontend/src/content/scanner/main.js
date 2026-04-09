@@ -2,8 +2,7 @@
  * ============================================================
  *  SCANNER — Content Script: DOM Form Field Scanner
  * ============================================================
- *  Scans the current page for all fillable form elements:
- *    <input>, <textarea>, <select>
+ *  Scans the current page for true text-entry form elements only.
  *
  *  Recursively traverses:
  *    - Shadow DOM (#shadow-root)
@@ -25,7 +24,51 @@
    *  FIELD EXTRACTION
    * -------------------------------------------------- */
 
-  const FILLABLE_SELECTORS = 'input, textarea, select, [contenteditable="true"], [role="textbox"], [role="combobox"]';
+  const TEXT_ENTRY_SELECTOR = [
+    'input:not([type])',
+    'input[type="text" i]',
+    'input[type="search" i]',
+    'input[type="email" i]',
+    'input[type="url" i]',
+    'input[type="tel" i]',
+    'input[type="password" i]',
+    'textarea',
+    '[contenteditable=""]',
+    '[contenteditable="true"]',
+    '[contenteditable="plaintext-only"]',
+    '[role="textbox"]',
+  ].join(', ');
+
+  const TEXT_ENTRY_INPUT_TYPES = new Set([
+    '',
+    'text',
+    'search',
+    'email',
+    'url',
+    'tel',
+    'password',
+  ]);
+
+  const DISALLOWED_TAGS = new Set(['select', 'option', 'optgroup', 'datalist']);
+  const DISALLOWED_ROLES = new Set([
+    'combobox',
+    'listbox',
+    'option',
+    'menu',
+    'menuitem',
+    'tree',
+    'treeitem',
+    'grid',
+    'button',
+    'checkbox',
+    'radio',
+    'switch',
+    'tab',
+    'slider',
+    'spinbutton',
+  ]);
+  const CHOICE_PLACEHOLDER_PATTERN = /^(select|choose)\b/i;
+  const CHOICE_WIDGET_CLASS_PATTERN = /\b(dropdown|picker|autocomplete|combo-?box|select-?input|select-?module)\b/i;
 
   const EXCLUDED_INPUT_TYPES = new Set([
     'hidden',
@@ -35,6 +78,135 @@
     'image',
     'file',
   ]);
+
+  function getRole(el) {
+    return (el.getAttribute('role') || '').trim().toLowerCase();
+  }
+
+  function getExplicitContentEditableValue(el) {
+    const value = el.getAttribute('contenteditable');
+    return value == null ? null : value.trim().toLowerCase();
+  }
+
+  function hasAllowedContentEditableValue(el) {
+    const value = getExplicitContentEditableValue(el);
+    return value === '' || value === 'true' || value === 'plaintext-only';
+  }
+
+  function hasMeaningfulAriaAttribute(el, attrName) {
+    const value = el.getAttribute(attrName);
+    if (value == null) return false;
+
+    const normalized = value.trim().toLowerCase();
+    return normalized !== '' && normalized !== 'false' && normalized !== 'none';
+  }
+
+  function hasChoiceWidgetContainer(el) {
+    let current = el;
+    for (let depth = 0; current && depth < 5; depth++) {
+      const className = typeof current.className === 'string' ? current.className : '';
+      const identifier = `${current.id || ''} ${className}`;
+      if (CHOICE_WIDGET_CLASS_PATTERN.test(identifier)) {
+        return true;
+      }
+      current = current.parentElement;
+    }
+    return false;
+  }
+
+  function isTextEntryPrimitive(el) {
+    const tagName = el.tagName.toLowerCase();
+    const role = getRole(el);
+
+    if (DISALLOWED_TAGS.has(tagName) || DISALLOWED_ROLES.has(role)) {
+      return false;
+    }
+
+    if (tagName === 'textarea') {
+      return true;
+    }
+
+    if (tagName === 'input') {
+      const type = (el.getAttribute('type') || '').trim().toLowerCase();
+      return !EXCLUDED_INPUT_TYPES.has(type) && TEXT_ENTRY_INPUT_TYPES.has(type);
+    }
+
+    if (role && role !== 'textbox') {
+      return false;
+    }
+
+    if (!el.isContentEditable && !hasAllowedContentEditableValue(el)) {
+      return false;
+    }
+
+    return hasAllowedContentEditableValue(el) || el.isContentEditable;
+  }
+
+  function hasChoiceWidgetSignals(el) {
+    const tagName = el.tagName.toLowerCase();
+    const role = getRole(el);
+    const placeholder = (el.getAttribute('placeholder') || el.getAttribute('aria-placeholder') || '').trim();
+    const isPrimitiveInput = tagName === 'input' || tagName === 'textarea';
+    const relationSignals = ['aria-controls', 'aria-owns', 'aria-activedescendant']
+      .some((attr) => hasMeaningfulAriaAttribute(el, attr));
+    const stateSignals = ['aria-expanded', 'aria-autocomplete']
+      .some((attr) => hasMeaningfulAriaAttribute(el, attr));
+
+    if (DISALLOWED_TAGS.has(tagName) || DISALLOWED_ROLES.has(role)) {
+      return true;
+    }
+
+    if (tagName === 'input' && el.hasAttribute('list')) {
+      return true;
+    }
+
+    if (placeholder && CHOICE_PLACEHOLDER_PATTERN.test(placeholder)) {
+      return true;
+    }
+
+    if (hasChoiceWidgetContainer(el)) {
+      return true;
+    }
+
+    if (hasMeaningfulAriaAttribute(el, 'aria-haspopup')) {
+      return true;
+    }
+
+    if (!isPrimitiveInput && (relationSignals || stateSignals)) {
+      return true;
+    }
+
+    if (relationSignals && stateSignals) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function isPureTextField(el) {
+    if (!isTextEntryPrimitive(el) || hasChoiceWidgetSignals(el)) {
+      return false;
+    }
+
+    if (el.disabled || el.readOnly || el.getAttribute('aria-disabled') === 'true') {
+      return false;
+    }
+
+    if (el.inert || el.closest('[inert]')) {
+      return false;
+    }
+
+    if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') {
+      return false;
+    }
+
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+      return false;
+    }
+
+    return true;
+  }
 
   /**
    * Retrieves 12 layers of structural context and surrounding text for AI hints.
@@ -89,57 +261,36 @@
    */
   function extractFieldData(el, frameSelector = '') {
     let tagName = el.tagName.toLowerCase();
-    const isContentEditable = el.getAttribute('contenteditable') === 'true';
-    const isAriaInput = el.getAttribute('role') === 'textbox' || el.getAttribute('role') === 'combobox';
-
     let type = (el.getAttribute('type') || '').toLowerCase();
+    const role = getRole(el);
 
-    // Skip non-fillable inputs
-    if (tagName === 'input' && EXCLUDED_INPUT_TYPES.has(type)) return null;
+    if (!isPureTextField(el)) return null;
 
-    // Treat contenteditable or aria-inputs as textareas if they aren't inputs
-    if ((isContentEditable || isAriaInput) && tagName !== 'input' && tagName !== 'textarea' && tagName !== 'select') {
-       type = tagName = 'contenteditable';
+    if (tagName === 'input' && !TEXT_ENTRY_INPUT_TYPES.has(type)) return null;
+
+    // Treat eligible custom contenteditable textboxes as synthetic contenteditable fields
+    if (tagName !== 'input' && tagName !== 'textarea') {
+      type = tagName = 'contenteditable';
     }
-
-    // Skip invisible / disabled elements
-    if (el.disabled || el.readOnly || el.getAttribute('aria-disabled') === 'true') return null;
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return null;
 
     const domContext = getStructuralContext(el);
 
     const field = {
       tagName,
-      type: type || (tagName === 'textarea' ? 'textarea' : tagName === 'select' ? 'select' : 'text'),
+      type: type || (tagName === 'textarea' ? 'textarea' : 'text'),
       id: el.id || '',
       name: el.getAttribute('name') || el.id || '',
       placeholder: el.getAttribute('placeholder') || el.getAttribute('aria-placeholder') || '',
       label: findLabel(el),
       ariaLabel: el.getAttribute('aria-label') || '',
       autocomplete: el.getAttribute('autocomplete') || '',
+      role,
+      hasListAttribute: el.hasAttribute('list'),
       currentValue: el.value || el.innerText || '',
       frameSelector,
       domPath: domContext.path,
       surroundingText: domContext.surroundingText
     };
-
-    // Collect <select> options or custom ARIA listboxes
-    if (tagName === 'select') {
-      field.options = Array.from(el.options).map((opt) => ({
-        value: opt.value,
-        text: opt.textContent.trim(),
-      }));
-    } else if (el.getAttribute('role') === 'combobox' && el.getAttribute('aria-owns')) {
-      // Very basic attempt to grab aria-owned listbox options
-      const listbox = el.ownerDocument.getElementById(el.getAttribute('aria-owns'));
-      if (listbox) {
-         field.options = Array.from(listbox.querySelectorAll('[role="option"]')).map((opt) => ({
-           value: opt.getAttribute('data-value') || opt.textContent.trim(),
-           text: opt.textContent.trim()
-         }));
-      }
-    }
 
     return field;
   }
@@ -185,7 +336,7 @@
     const parentLabel = el.closest('label');
     if (parentLabel) {
       const clone = parentLabel.cloneNode(true);
-      const childInput = clone.querySelector(FILLABLE_SELECTORS);
+      const childInput = clone.querySelector(TEXT_ENTRY_SELECTOR);
       if (childInput) childInput.remove();
       const text = clone.textContent.trim();
       if (text) return text;
@@ -220,7 +371,7 @@
     for (let depth = 0; parent && depth < 5; depth++) {
       // Check for a label sibling of the input's parent
       const label = parent.querySelector(':scope > label, :scope > span.label, :scope > legend');
-      if (label && !label.querySelector(FILLABLE_SELECTORS)) {
+      if (label && !label.querySelector(TEXT_ENTRY_SELECTOR)) {
         const text = label.textContent.trim();
         if (text && text.length < 200) return text;
       }
@@ -244,7 +395,7 @@
    */
   function scanNode(root, fields = [], frameSelector = '') {
     // 1. Query fillable elements in this root
-    const elements = root.querySelectorAll(FILLABLE_SELECTORS);
+    const elements = root.querySelectorAll(TEXT_ENTRY_SELECTOR);
     elements.forEach((el) => {
       const data = extractFieldData(el, frameSelector);
       if (data) fields.push(data);
@@ -290,6 +441,16 @@
     });
 
     return fields;
+  }
+
+  function matchesResolvedField(el, fieldMeta) {
+    if (!el || !isPureTextField(el)) return false;
+
+    if (fieldMeta.tagName === 'contenteditable') {
+      return el.isContentEditable || getRole(el) === 'textbox';
+    }
+
+    return el.tagName.toLowerCase() === fieldMeta.tagName;
   }
 
   /* --------------------------------------------------
@@ -385,13 +546,19 @@
     // 2. Try by ID (Best)
     if (fieldMeta.id) {
       const el = root.getElementById(fieldMeta.id);
-      if (el && el.tagName.toLowerCase() === fieldMeta.tagName) return el;
+      if (matchesResolvedField(el, fieldMeta)) return el;
     }
 
     // 3. Try by Name (Standard)
     if (fieldMeta.name) {
-      const el = root.querySelector(`${fieldMeta.tagName}[name="${CSS.escape(fieldMeta.name)}"]`);
-      if (el) return el;
+      if (fieldMeta.tagName === 'contenteditable') {
+        const candidates = root.querySelectorAll(`[name="${CSS.escape(fieldMeta.name)}"]`);
+        const el = Array.from(candidates).find((candidate) => matchesResolvedField(candidate, fieldMeta));
+        if (el) return el;
+      } else {
+        const el = root.querySelector(`${fieldMeta.tagName}[name="${CSS.escape(fieldMeta.name)}"]`);
+        if (matchesResolvedField(el, fieldMeta)) return el;
+      }
     }
 
     // 4. Try by Aria-Label or Placeholder (Google Forms special)
@@ -403,18 +570,16 @@
       ].filter(Boolean).join(',');
 
       if (searchTerms) {
-        const el = root.querySelector(searchTerms);
+        const candidates = root.querySelectorAll(searchTerms);
+        const el = Array.from(candidates).find((candidate) => matchesResolvedField(candidate, fieldMeta));
         if (el) return el;
       }
     }
 
     // 5. Positional / Index Fallback (Last resort)
     if (typeof fieldMeta.index === 'number') {
-      const allEls = root.querySelectorAll(FILLABLE_SELECTORS);
-      const filtered = Array.from(allEls).filter(el => {
-        const type = (el.getAttribute('type') || '').toLowerCase();
-        return !EXCLUDED_INPUT_TYPES.has(type);
-      });
+      const allEls = root.querySelectorAll(TEXT_ENTRY_SELECTOR);
+      const filtered = Array.from(allEls).filter((el) => isPureTextField(el));
       if (filtered[fieldMeta.index]) return filtered[fieldMeta.index];
     }
 

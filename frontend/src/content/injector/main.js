@@ -32,6 +32,147 @@
     'value'
   )?.set;
 
+  const ALLOWED_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password']);
+  const DISALLOWED_TAGS = new Set(['select', 'option', 'optgroup', 'datalist']);
+  const DISALLOWED_ROLES = new Set([
+    'combobox',
+    'listbox',
+    'option',
+    'menu',
+    'menuitem',
+    'tree',
+    'treeitem',
+    'grid',
+    'button',
+    'checkbox',
+    'radio',
+    'switch',
+    'tab',
+    'slider',
+    'spinbutton',
+  ]);
+  const CHOICE_PLACEHOLDER_PATTERN = /^(select|choose)\b/i;
+  const CHOICE_WIDGET_CLASS_PATTERN = /\b(dropdown|picker|autocomplete|combo-?box|select-?input|select-?module)\b/i;
+
+  function getRole(el) {
+    return (el.getAttribute('role') || '').trim().toLowerCase();
+  }
+
+  function getExplicitContentEditableValue(el) {
+    const value = el.getAttribute('contenteditable');
+    return value == null ? null : value.trim().toLowerCase();
+  }
+
+  function hasAllowedContentEditableValue(el) {
+    const value = getExplicitContentEditableValue(el);
+    return value === '' || value === 'true' || value === 'plaintext-only';
+  }
+
+  function hasMeaningfulAriaAttribute(el, attrName) {
+    const value = el.getAttribute(attrName);
+    if (value == null) return false;
+
+    const normalized = value.trim().toLowerCase();
+    return normalized !== '' && normalized !== 'false' && normalized !== 'none';
+  }
+
+  function hasChoiceWidgetContainer(el) {
+    let current = el;
+    for (let depth = 0; current && depth < 5; depth++) {
+      const className = typeof current.className === 'string' ? current.className : '';
+      const identifier = `${current.id || ''} ${className}`;
+      if (CHOICE_WIDGET_CLASS_PATTERN.test(identifier)) {
+        return true;
+      }
+      current = current.parentElement;
+    }
+    return false;
+  }
+
+  function isPureTextEntryElement(el) {
+    if (!el) return false;
+
+    const tag = el.tagName.toLowerCase();
+    const role = getRole(el);
+    const placeholder = (el.getAttribute('placeholder') || el.getAttribute('aria-placeholder') || '').trim();
+    const relationSignals = ['aria-controls', 'aria-owns', 'aria-activedescendant']
+      .some((attr) => hasMeaningfulAriaAttribute(el, attr));
+    const stateSignals = ['aria-expanded', 'aria-autocomplete']
+      .some((attr) => hasMeaningfulAriaAttribute(el, attr));
+
+    if (DISALLOWED_TAGS.has(tag) || DISALLOWED_ROLES.has(role)) {
+      return false;
+    }
+
+    if (tag === 'input') {
+      const type = (el.getAttribute('type') || '').trim().toLowerCase();
+      if (!ALLOWED_INPUT_TYPES.has(type) || el.hasAttribute('list')) {
+        return false;
+      }
+    } else if (tag !== 'textarea') {
+      if (role && role !== 'textbox') {
+        return false;
+      }
+      if (!el.isContentEditable && !hasAllowedContentEditableValue(el)) {
+        return false;
+      }
+    }
+
+    if (
+      placeholder && CHOICE_PLACEHOLDER_PATTERN.test(placeholder) ||
+      hasChoiceWidgetContainer(el) ||
+      hasMeaningfulAriaAttribute(el, 'aria-haspopup') ||
+      (relationSignals && stateSignals) ||
+      ((tag !== 'input' && tag !== 'textarea') && (relationSignals || stateSignals))
+    ) {
+      return false;
+    }
+
+    if (
+      el.disabled ||
+      el.readOnly ||
+      el.getAttribute('aria-disabled') === 'true' ||
+      el.inert ||
+      el.closest('[inert]')
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function isAllowedFieldMeta(fieldMeta) {
+    if (!fieldMeta || typeof fieldMeta !== 'object') return false;
+
+    const tagName = (fieldMeta.tagName || '').toLowerCase();
+    const type = (fieldMeta.type || '').toLowerCase();
+    const role = (fieldMeta.role || '').toLowerCase();
+    const placeholder = (fieldMeta.placeholder || '').trim().toLowerCase();
+    const domPath = (fieldMeta.domPath || '').toLowerCase();
+
+    if (DISALLOWED_TAGS.has(tagName) || DISALLOWED_ROLES.has(role)) {
+      return false;
+    }
+
+    if (fieldMeta.hasListAttribute) {
+      return false;
+    }
+
+    if (/^(select|choose)\b/.test(placeholder)) {
+      return false;
+    }
+
+    if (CHOICE_WIDGET_CLASS_PATTERN.test(domPath)) {
+      return false;
+    }
+
+    if (tagName === 'input') {
+      return ALLOWED_INPUT_TYPES.has(type);
+    }
+
+    return tagName === 'textarea' || tagName === 'contenteditable';
+  }
+
   /* --------------------------------------------------
    *  SYNTHETIC EVENT DISPATCHERS
    * -------------------------------------------------- */
@@ -82,27 +223,11 @@
     const tag = el.tagName.toLowerCase();
 
     try {
-      if (tag === 'select') {
-        // Ensure the option exists
-        const optionExists = Array.from(el.options).some((o) => o.value === value);
-        if (!optionExists) {
-          // Try matching by text content
-          const matchByText = Array.from(el.options).find(
-            (o) => o.textContent.trim().toLowerCase() === value.toLowerCase()
-          );
-          if (matchByText) {
-            value = matchByText.value;
-          } else {
-            console.warn(`[LazyFill] Option "${value}" not found in <select>`);
-            return false;
-          }
-        }
-        if (nativeSelectValueSetter) {
-          nativeSelectValueSetter.call(el, value);
-        } else {
-          el.value = value;
-        }
-      } else if (tag === 'textarea') {
+      if (!isPureTextEntryElement(el)) {
+        return false;
+      }
+
+      if (tag === 'textarea') {
         if (nativeTextAreaValueSetter) {
           nativeTextAreaValueSetter.call(el, value);
         } else {
@@ -192,7 +317,7 @@
 
     mappings.forEach((mapping) => {
       const fieldMeta = scannedFields[mapping.index];
-      if (!fieldMeta) {
+      if (!fieldMeta || !isAllowedFieldMeta(fieldMeta)) {
         failed++;
         return;
       }
@@ -200,6 +325,11 @@
       const el = resolveElement({ ...fieldMeta, index: mapping.index }, scannedFields);
       if (!el) {
         console.warn(`[LazyFill] Could not find element for index ${mapping.index}`);
+        failed++;
+        return;
+      }
+
+      if (!isPureTextEntryElement(el)) {
         failed++;
         return;
       }
