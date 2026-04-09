@@ -25,6 +25,11 @@
     --ring: 250 100% 72%;
     --radius: 1.25rem;
   }
+  
+  body, #root, h1, h2, h3, p {
+    margin: 0 !important;
+    padding-top: 0 !important;
+  }
 
   * {
     border-color: hsl(var(--border));

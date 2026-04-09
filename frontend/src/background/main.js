@@ -117,6 +117,32 @@ function filterMappingsByIntent(mappings, scannedFields, profileFields) {
  * ------------------------------------------------------- */
 
 const handlers = {
+  /* ---- AUTH ---- */
+  AUTH_SIGNUP: async (payload) => {
+    const result = await db.signUp(payload);
+    return { success: true, ...result };
+  },
+
+  AUTH_LOGIN: async (payload) => {
+    const result = await db.login(payload);
+    return { success: true, ...result };
+  },
+
+  AUTH_LOGOUT: async () => {
+    await db.logout();
+    return { success: true };
+  },
+
+  AUTH_GET_SESSION: async () => {
+    const state = await db.getAuthState();
+    return { success: true, ...state };
+  },
+
+  AUTH_CHANGE_PASSWORD: async (payload) => {
+    const result = await db.changePassword(payload);
+    return { success: true, ...result };
+  },
+
   /* ---- API KEY ---- */
   SAVE_API_KEY: async (payload) => {
     return SettingsManager.saveApiKey(payload.apiKey);

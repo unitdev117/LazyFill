@@ -14,15 +14,12 @@ export default function ProfileManager() {
   const activeProfileId = settings?.activeProfileId;
 
   const createProfile = () => {
-    const newProfile = {
+    setEditingProfile({
       id: crypto.randomUUID(),
-      name: 'New Profile',
-      fields: { 'First Name': '', 'Last Name': '', 'Email': '' }
-    };
-    setProfiles([...profiles, newProfile]);
-    if (!activeProfileId) {
-      setSettings({ ...settings, activeProfileId: newProfile.id });
-    }
+      name: '',
+      fields: { 'First Name': '', 'Last Name': '', 'Email': '' },
+      isNew: true,
+    });
   };
 
   const deleteProfile = (id) => {
@@ -38,14 +35,23 @@ export default function ProfileManager() {
 
   if (editingProfile) {
     return (
-      <ProfileEditor
-        profile={editingProfile}
-        onSave={(data) => {
-          setProfiles(profiles.map(p => p.id === data.id ? data : p));
-          setEditingProfile(null);
-        }}
-        onCancel={() => setEditingProfile(null)}
-      />
+        <ProfileEditor
+          profile={editingProfile}
+          onSave={(data) => {
+            const existingIndex = profiles.findIndex((profile) => profile.id === data.id);
+            const nextProfiles =
+              existingIndex >= 0
+                ? profiles.map((profile) => (profile.id === data.id ? data : profile))
+                : [...profiles, data];
+
+            setProfiles(nextProfiles);
+            if (!activeProfileId) {
+              setSettings({ ...settings, activeProfileId: data.id });
+            }
+            setEditingProfile(null);
+          }}
+          onCancel={() => setEditingProfile(null)}
+        />
     );
   }
 
@@ -110,7 +116,6 @@ export default function ProfileManager() {
 
 function ProfileEditor({ profile, onSave, onCancel }) {
   const [name, setName] = useState(profile?.name || '');
-  // Separate UI state for fields to use stable IDs for React keys
   const [fields, setFields] = useState(() => 
     Object.entries(profile.fields || {}).map(([key, value]) => ({
       id: Math.random().toString(36).substring(2, 9),
@@ -120,7 +125,6 @@ function ProfileEditor({ profile, onSave, onCancel }) {
   );
 
   const addField = () => {
-    // Prepend new field with stable ID
     setFields([{ id: Math.random().toString(36).substring(2, 9), key: '', value: '' }, ...fields]);
   };
 
@@ -133,11 +137,15 @@ function ProfileEditor({ profile, onSave, onCancel }) {
   };
 
   const handleSave = () => {
+    if (!name.trim()) {
+      return;
+    }
+
     const fieldsObj = {};
     fields.forEach(f => {
       if (f.key.trim()) fieldsObj[f.key.trim()] = f.value;
     });
-    onSave({ ...profile, name, fields: fieldsObj });
+    onSave({ ...profile, name: name.trim(), fields: fieldsObj });
   };
 
   return (
@@ -155,6 +163,7 @@ function ProfileEditor({ profile, onSave, onCancel }) {
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
+            placeholder="Profile name"
             className="bg-secondary/20 border-white/5 h-12 text-base font-semibold focus:ring-primary/50"
           />
         </div>

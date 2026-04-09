@@ -9,15 +9,22 @@ import { cn } from '@/lib/utils';
 
 export default function SettingsManager() {
   const [apiKey, setApiKey] = useChromeStorage('lazyfill_api_key', '');
+  const [draftApiKey, setDraftApiKey] = React.useState('');
   const [showKey, setShowKey] = React.useState(false);
   const [isSaved, setIsSaved] = React.useState(false);
 
+  React.useEffect(() => {
+    setDraftApiKey(apiKey || '');
+  }, [apiKey]);
+
   const handleSave = () => {
+    setApiKey(draftApiKey.trim());
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 3000);
   };
 
   const deleteKey = () => {
+    setDraftApiKey('');
     setApiKey('');
     setIsSaved(false);
   };
@@ -43,8 +50,8 @@ export default function SettingsManager() {
             <Input 
               type={showKey ? "text" : "password"} 
               placeholder="••••••••••••••••••••••••••••" 
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              value={draftApiKey}
+              onChange={(e) => setDraftApiKey(e.target.value)}
               className="bg-secondary/20 border-white/5 h-12 pr-12 font-mono text-xs tracking-[0.2em] text-center focus:border-primary/50 rounded-xl"
             />
             <button 
