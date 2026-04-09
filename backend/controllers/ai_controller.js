@@ -10,13 +10,13 @@
  */
 
 import { handleError } from '../../util/errors/error_handler.js';
+import aiQueue from '../queues/ai_queue.js';
 
 const GOOGLE_AI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 // Model priority list — tries each in order until one succeeds.
-// gemma-4-26b is the primary model.
-// gemma-3 models are used as high-efficiency fallbacks.
-const MODELS = ['gemma-4-26b', 'gemma-3-4b', 'gemma-3-1b'];
+// gemini-3.1-flash-lite-preview is the primary model.
+const MODELS = ['gemini-3.1-flash-lite-preview'];
 
 const AIController = {
   _getPromptFields(scannedFields) {
@@ -63,8 +63,8 @@ const AIController = {
   /**
    * Build the prompt that maps scanned form fields to profile data.
    * @param {Array}  scannedFields  — [ { id, name, type, label, placeholder, tagName, options? } ]
-   * @param {Object} profileFields  — { "Full Name": "John Doe", "Email": "john@test.com", ... }
-   * @param {string} profileName    — e.g. "Education"
+   * @param {Object} profileFields - { "Full Name": "John Doe", "Email": "john@test.com", ... }
+   * @param {string} profileName - e.g. "Education"
    * @returns {string}
    */
   buildPrompt(scannedFields, profileFields, profileName) {
@@ -119,7 +119,7 @@ RULES:
 6. SECURITY/ACCURACY RULE: Do NOT map numeric IDs, account numbers, or bill numbers to common text fields like "City", "Name", or "Address" unless the profile key explicitly contains those words.
 7. If in doubt, omit the field. It is better to leave it empty than to fill it with incorrect data.
 8. Do NOT invent data that is not in the profile.
-9. Do NOT include any explanation — ONLY the JSON array.
+9. Do NOT include any explanation - ONLY the JSON array.
 
 OUTPUT:`;
   },
@@ -129,9 +129,10 @@ OUTPUT:`;
    * Tries each model in the MODELS list; falls back on 404.
    * @param {string} apiKey
    * @param {string} prompt
+   * @param {AbortSignal} [signal]
    * @returns {Promise<{ success: boolean, mappings?: Array, error?: Object }>}
    */
-  async callAI(apiKey, prompt) {
+  async callAI(apiKey, prompt, signal) {
     const cleanApiKey = apiKey ? apiKey.trim() : '';
 
     // Guard: catch empty key BEFORE making the request
@@ -164,7 +165,8 @@ OUTPUT:`;
     // Try each model in priority order
     for (const model of MODELS) {
       const url = `${GOOGLE_AI_BASE}/${model}:generateContent?key=${cleanApiKey}`;
-      console.log(`[LazyFill] Trying Google AI model: ${model}`);
+      console.log(`[LazyFill] AI REQUEST >> Model: ${model}`);
+      console.log(`[LazyFill] AI REQUEST >> Endpoint: ${GOOGLE_AI_BASE}/${model}:generateContent`);
 
       let response;
       try {
@@ -172,6 +174,7 @@ OUTPUT:`;
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
+          signal, // Pass the signal to fetch for physical cancellation
         });
       } catch (networkErr) {
         lastError = networkErr;
@@ -186,7 +189,7 @@ OUTPUT:`;
         continue;
       }
 
-      // Non-OK response (rate limit, auth error, etc.) — return immediately
+      // Non-OK response (rate limit, auth error, etc.) - return immediately
       if (!response.ok) {
         let body = {};
         try {
@@ -239,8 +242,9 @@ OUTPUT:`;
    * @param {Array}  scannedFields
    * @param {Object} profileFields
    * @param {string} profileName
+   * @param {Object} [options] - { signal, taskId }
    */
-  async generateFill(apiKey, scannedFields, profileFields, profileName) {
+  async generateFill(apiKey, scannedFields, profileFields, profileName, options = {}) {
     if (!apiKey) {
       return {
         success: false,
@@ -263,15 +267,29 @@ OUTPUT:`;
     }
 
     const prompt = this.buildPrompt(scannedFields, profileFields, profileName);
-    const aiResult = await this.callAI(apiKey, prompt);
-    if (!aiResult.success || !aiResult.mappings) {
-      return aiResult;
-    }
+    
+    // Use the central queue to manage rate limits and concurrency
+    try {
+      return await aiQueue.add(async (signal) => {
+        const aiResult = await this.callAI(apiKey, prompt, signal);
+        if (!aiResult.success || !aiResult.mappings) {
+          return aiResult;
+        }
 
-    return {
-      success: true,
-      mappings: this._normalizeMappings(aiResult.mappings, scannedFields),
-    };
+        return {
+          success: true,
+          mappings: this._normalizeMappings(aiResult.mappings, scannedFields),
+        };
+      }, options);
+    } catch (err) {
+      if (err.category === 'QUEUE_ERROR') {
+        return {
+          success: false,
+          error: { category: 'QUEUE_ERROR', message: err.message, isBusy: true }
+        };
+      }
+      throw err; // Re-throw unhandled errors (aborts, etc. will be caught by handlers)
+    }
   },
 };
 

@@ -20,6 +20,22 @@ import db from '../../../backend/database/db_adapter.js';
 import FieldFilter from '../../../backend/services/field_filter.js';
 import CacheManager from '../../../backend/services/cache_manager.js';
 import LocalMatcher from '../../../backend/services/local_matcher.js';
+import aiQueue from '../../../backend/queues/ai_queue.js';
+
+// Global map to track active AI requests per tab for cancellation
+const activeControllers = new Map();
+
+/**
+ * Cleanup and abort any pending AI calls for a specific tab.
+ */
+function cleanupTabRequest(tabId) {
+  const controller = activeControllers.get(tabId);
+  if (controller) {
+    console.log(`[LazyFill] Aborting AI request for tab: ${tabId}`);
+    controller.abort('Tab closed or abandoned.');
+    activeControllers.delete(tabId);
+  }
+}
 
 function normalizeIntentText(value) {
   return (value || '').toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
@@ -175,8 +191,14 @@ const handlers = {
     return { success: true };
   },
 
-  PROCESS_SCAN_RESULTS: async (payload) => {
+  PROCESS_SCAN_RESULTS: async (payload, sender) => {
+    const tabId = sender?.tab?.id;
     const { scannedFields } = payload;
+    
+    // Cancellation support
+    if (tabId) cleanupTabRequest(tabId);
+    const controller = new AbortController();
+    if (tabId) activeControllers.set(tabId, controller);
 
     // 1. Get Context
     const apiKey = await SettingsManager.getApiKey();
@@ -200,16 +222,25 @@ const handlers = {
     // 4. Call AI for remaining fields
     if (remainingFields.length > 0) {
       console.log('[LazyFill] Manual Scan: Requesting AI for complex fields...');
-      const aiResult = await AIController.generateFill(apiKey, remainingFields, profile.fields, profile.name);
-      if (aiResult.success && aiResult.mappings) {
-        finalMappings = filterMappingsByIntent(
-          [...finalMappings, ...aiResult.mappings],
-          scannedFields,
-          profile.fields
+      try {
+        const aiResult = await AIController.generateFill(
+          apiKey, 
+          remainingFields, 
+          profile.fields, 
+          profile.name,
+          { signal: controller.signal }
         );
-      } else if (!aiResult.success) {
-        // If AI fails but we have local matches, we can still return those
-        return aiResult;
+        if (aiResult.success && aiResult.mappings) {
+          finalMappings = filterMappingsByIntent(
+            [...finalMappings, ...aiResult.mappings],
+            scannedFields,
+            profile.fields
+          );
+        } else if (!aiResult.success) {
+          return aiResult;
+        }
+      } finally {
+        if (tabId) activeControllers.delete(tabId);
       }
     }
 
@@ -219,6 +250,11 @@ const handlers = {
   BACKGROUND_PROCESS_SCAN: async (payload, sender) => {
     const tabId = sender?.tab?.id;
     if (!tabId) return { success: false, error: 'No tab id' };
+
+    // Cancellation support
+    cleanupTabRequest(tabId);
+    const controller = new AbortController();
+    activeControllers.set(tabId, controller);
 
     // Anti-Race-Condition: Keep track of the latest scan trigger per tab
     const currentScanTime = Date.now();
@@ -295,9 +331,16 @@ const handlers = {
     // If we still have missing fields, call Google AI to finish the job
     if (remainingFields.length > 0) {
       console.log(`[LazyFill] 🤖 Cache is missing ${remainingFields.length} fields. Healing via Google AI...`);
-      const aiResult = await AIController.generateFill(apiKey, remainingFields, profile.fields, profile.name);
-      
-      if (aiResult.success && aiResult.mappings) {
+      try {
+        const aiResult = await AIController.generateFill(
+          apiKey, 
+          remainingFields, 
+          profile.fields, 
+          profile.name,
+          { signal: controller.signal }
+        );
+        
+        if (aiResult.success && aiResult.mappings) {
         // Merge New AI results into our mappings
         const finalMappings = filterMappingsByIntent(
           [...instantMappings, ...aiResult.mappings],
@@ -319,7 +362,12 @@ const handlers = {
         }
         return { success: true, count: finalMappings.length };
       }
-    } else if (localMappings.length > 0) {
+      } finally {
+        activeControllers.delete(tabId);
+      }
+    }
+    
+    if (localMappings.length > 0) {
       // If we healed via local matcher, update the cache so we don't even run Local Matcher next time
       await CacheManager.save(fprint, instantMappings, payload.scannedFields);
       console.log('[LazyFill] ✅ Form healed locally. Cache updated.');
@@ -393,13 +441,19 @@ async function checkAndGhost(tabId) {
     return;
   }
 
+  // 2. Consult AI
+  cleanupTabRequest(tabId);
+  const controller = new AbortController();
+  activeControllers.set(tabId, controller);
+
   try {
     // 2. Consult AI
     const aiRes = await AIController.generateFill(
       apiKey, 
       scanRes.scannedFields, 
       profile.fields, 
-      profile.name
+      profile.name,
+      { signal: controller.signal }
     );
 
     // 3. Show Ghost Text
@@ -414,7 +468,13 @@ async function checkAndGhost(tabId) {
       });
     }
   } catch (err) {
-    console.warn('[LazyFill] Autonomous scan failed:', err.message);
+    if (err.name === 'AbortError') {
+      console.log('[LazyFill] Autonomous scan cancelled.');
+    } else {
+      console.warn('[LazyFill] Autonomous scan failed:', err.message);
+    }
+  } finally {
+    activeControllers.delete(tabId);
   }
 }
 
@@ -435,9 +495,17 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(handleNav);
 
 // Tab status manual fallback
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'loading') {
+    cleanupTabRequest(tabId); // Cancel moving away
+  }
   if (changeInfo.status === 'complete' && tab.url && tab.url.startsWith('http')) {
     checkAndGhost(tabId);
   }
+});
+
+// tab closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  cleanupTabRequest(tabId);
 });
 
 /* -------------------------------------------------------
@@ -517,7 +585,7 @@ async function purgeOldCache() {
 
 
 /* -------------------------------------------------------
- *  STARTUP — self-healing storage check on every wake-up
+ *  STARTUP - self-healing storage check on every wake-up
  * ------------------------------------------------------- */
 
 self.addEventListener('activate', async () => {
