@@ -6,13 +6,35 @@ import { Scan, Ghost, ChevronDown, CheckCircle2, AlertCircle, Loader2 } from 'lu
 import { cn } from '@/lib/utils';
 
 export function Dashboard() {
-  const [settings, setSettings] = useChromeStorage('lazyfill_settings', { activeProfileId: null, ghostPreviewEnabled: true });
+  const [settings, setSettings] = useChromeStorage('lazyfill_settings', { 
+    activeProfileId: null, 
+    ghostPreviewEnabled: true,
+    autoFillEnabled: false 
+  });
+  
   const activeProfileId = settings?.activeProfileId;
   const ghostPreviewMode = settings?.ghostPreviewEnabled ?? true;
-  const setGhostPreviewMode = (val) => setSettings(prev => ({ ...prev, ghostPreviewEnabled: val }));
+  const autoFillMode = settings?.autoFillEnabled ?? false;
+
+  const setGhostPreviewMode = (val) => {
+    setSettings(prev => ({
+      ...prev,
+      ghostPreviewEnabled: val,
+      autoFillEnabled: val ? false : (prev?.autoFillEnabled ?? false),
+    }));
+    chrome.runtime.sendMessage({ action: 'SET_GHOST_PREVIEW', payload: { enabled: val } });
+  };
+
+  const setAutoFillMode = (val) => {
+    setSettings(prev => ({
+      ...prev,
+      autoFillEnabled: val,
+      ghostPreviewEnabled: val ? false : (prev?.ghostPreviewEnabled ?? true),
+    }));
+    chrome.runtime.sendMessage({ action: 'SET_AUTO_FILL_MODE', payload: { enabled: val } });
+  };
   
   const [profiles] = useChromeStorage('lazyfill_profiles', []);
-  const [autoFillMode, setAutoFillMode] = useChromeStorage('lazyfill_autofill_mode', false);
   
   const [status, setStatus] = useState({ state: 'ready', message: 'Ready to scan' });
   const [stats, setStats] = useState({ found: 0, fillable: 0 });

@@ -154,7 +154,24 @@ const SettingsManager = {
    * @param {boolean} enabled 
    */
   async setGhostPreview(enabled) {
-    await db.saveSettings({ ghostPreviewEnabled: enabled });
+    const updates = { ghostPreviewEnabled: enabled };
+    if (enabled) {
+      updates.autoFillEnabled = false;
+    }
+    await db.saveSettings(updates);
+    return { success: true };
+  },
+
+  /**
+   * Enable or disable autonomous Auto-fill mode
+   * @param {boolean} enabled 
+   */
+  async setAutoFillMode(enabled) {
+    const updates = { autoFillEnabled: enabled };
+    if (enabled) {
+      updates.ghostPreviewEnabled = false;
+    }
+    await db.saveSettings(updates);
     return { success: true };
   }
 };

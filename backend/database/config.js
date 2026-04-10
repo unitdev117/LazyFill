@@ -14,6 +14,7 @@ export const STORAGE_KEYS = Object.freeze({
 export const DEFAULT_SETTINGS = Object.freeze({
   activeProfileId: null,
   ghostPreviewEnabled: true,
+  autoFillEnabled: false,
 });
 
 export const CONFIG = Object.freeze({

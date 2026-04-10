@@ -112,6 +112,133 @@ function filterMappingsByIntent(mappings, scannedFields, profileFields) {
   });
 }
 
+function clearGhostText(tabId) {
+  if (!tabId) return;
+
+  chrome.tabs.sendMessage(tabId, { action: 'CLEAR_GHOST_TEXT' }).catch(() => {});
+}
+
+/* -------------------------------------------------------
+ *  INTELLIGENCE ENGINE — Unified Mapping Orchestrator
+ * ------------------------------------------------------- */
+
+/**
+ * The single source of truth for form mapping.
+ * Enforces: Clean -> Cache -> Local Match -> AI Healing -> Save Cache.
+ */
+async function executeMappingCycle(scannedFields, tabId, options = {}) {
+  // 1. Get Context
+  const apiKey = await SettingsManager.getApiKey();
+  const profile = await SettingsManager.getActiveProfile();
+  const settings = await SettingsManager.getSettings();
+
+  if (!apiKey || !profile) {
+    return { success: false, error: 'Not configured' };
+  }
+
+  // 2. Pre-calculate THE Form Fingerprint (Stable structure)
+  const fprint = CacheManager.generateFingerprint(scannedFields);
+
+  // 3. Optimization: Exclude already-filled fields
+  const emptyFields = FieldFilter.clean(scannedFields);
+  if (emptyFields.length === 0) {
+    if (tabId && options.isGhost) {
+      clearGhostText(tabId);
+    }
+    return { success: true, mappings: [], reason: 'No empty fields' };
+  }
+
+  // 4. Cache Look-up (Assembly Line 2.0)
+  const rawCachedMappings = (await CacheManager.get(fprint)) || [];
+  const cachedMappings = filterMappingsByIntent(
+    CacheManager.reconcileMappings(rawCachedMappings, scannedFields),
+    scannedFields,
+    profile.fields
+  );
+
+  // 5. Gap Detection (Healing)
+  const missingFields = emptyFields.filter(
+    (field) => !cachedMappings.some((m) => m.index === field.index)
+  );
+
+  // 6. Local Matcher Priority (Instant Healing)
+  const { localMappings, remainingFields } = LocalMatcher.findMatches(missingFields, profile.fields);
+
+  // Combine Cache + Local Matcher for an "Instant" first-pass
+  let currentMappings = filterMappingsByIntent(
+    [...cachedMappings, ...localMappings],
+    scannedFields,
+    profile.fields
+  );
+
+  // 7. Instant UI Update / Autofill
+  if (tabId && (options.isGhost || settings.autoFillEnabled) && currentMappings.length > 0) {
+    if (settings.autoFillEnabled) {
+      clearGhostText(tabId);
+      console.log(`[LazyFill] Intelligence Engine: Autofilling ${currentMappings.length} fields (Auto-fill Mode ON)`);
+      chrome.tabs.sendMessage(tabId, {
+        action: 'FILL_FIELDS',
+        payload: { mappings: currentMappings, scannedFields },
+      }).catch(() => {});
+    } else if (settings.ghostPreviewEnabled) {
+      chrome.tabs.sendMessage(tabId, {
+        action: 'SHOW_GHOST_TEXT',
+        payload: { mappings: currentMappings, scannedFields },
+      }).catch(() => {});
+    }
+  }
+
+  // 8. AI Healing (if needed)
+  if (remainingFields.length > 0) {
+    console.log(`[LazyFill] Intelligence Engine: Calling AI for ${remainingFields.length} missing fields.`);
+    try {
+      const aiResult = await AIController.generateFill(apiKey, remainingFields, profile.fields, profile.name, {
+        signal: options.signal,
+      });
+
+      if (aiResult.success && aiResult.mappings) {
+        // Merge New AI results into our mappings
+        currentMappings = filterMappingsByIntent(
+          [...currentMappings, ...aiResult.mappings],
+          scannedFields,
+          profile.fields
+        );
+
+        // Save the "Healed" cache back for next time
+        await CacheManager.save(fprint, currentMappings, scannedFields);
+
+        // Update UI or Autofill with the final complete set
+        if (tabId && (options.isGhost || settings.autoFillEnabled)) {
+          if (settings.autoFillEnabled) {
+            clearGhostText(tabId);
+            chrome.tabs.sendMessage(tabId, {
+              action: 'FILL_FIELDS',
+              payload: { mappings: currentMappings, scannedFields },
+            }).catch(() => {});
+          } else if (settings.ghostPreviewEnabled) {
+            chrome.tabs.sendMessage(tabId, {
+              action: 'SHOW_GHOST_TEXT',
+              payload: { mappings: currentMappings, scannedFields },
+            }).catch(() => {});
+          }
+        }
+      } else if (!aiResult.success && !options.isGhost) {
+        // Only return AI error if this is a manual autofill request
+        return aiResult;
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+      console.warn('[LazyFill] Mapping cycle AI failed:', err.message);
+    }
+  } else if (localMappings.length > 0) {
+    // If we healed via local matcher, update the cache so we don't even run Local Matcher next time
+    await CacheManager.save(fprint, currentMappings, scannedFields);
+    console.log('[LazyFill] Intelligence Engine: Form healed locally. Cache updated.');
+  }
+
+  return { success: true, mappings: currentMappings };
+}
+
 /* -------------------------------------------------------
  *  MESSAGE ROUTER — maps action names to handler functions
  * ------------------------------------------------------- */
@@ -220,193 +347,76 @@ const handlers = {
   PROCESS_SCAN_RESULTS: async (payload, sender) => {
     const tabId = sender?.tab?.id;
     const { scannedFields } = payload;
-    
+
     // Cancellation support
     if (tabId) cleanupTabRequest(tabId);
     const controller = new AbortController();
     if (tabId) activeControllers.set(tabId, controller);
 
-    // 1. Get Context
-    const apiKey = await SettingsManager.getApiKey();
-    const profile = await SettingsManager.getActiveProfile();
-    if (!apiKey || !profile) {
-      return { success: false, error: 'Not configured' };
+    try {
+      return await executeMappingCycle(scannedFields, tabId, {
+        signal: controller.signal,
+        isGhost: false,
+      });
+    } finally {
+      if (tabId) activeControllers.delete(tabId);
     }
-
-    // 2. Optimization: Exclude already-filled fields
-    const emptyFields = FieldFilter.clean(scannedFields);
-    if (emptyFields.length === 0) {
-      return { success: true, mappings: [], reason: 'No empty fields' };
-    }
-
-    // 3. Optimization: Local Matching
-    const { localMappings, remainingFields } = LocalMatcher.findMatches(emptyFields, profile.fields);
-    console.log(`[LazyFill] Manual Scan: ${localMappings.length} local matches, ${remainingFields.length} to AI.`);
-
-    let finalMappings = filterMappingsByIntent(localMappings, scannedFields, profile.fields);
-
-    // 4. Call AI for remaining fields
-    if (remainingFields.length > 0) {
-      console.log('[LazyFill] Manual Scan: Requesting AI for complex fields...');
-      try {
-        const aiResult = await AIController.generateFill(
-          apiKey, 
-          remainingFields, 
-          profile.fields, 
-          profile.name,
-          { signal: controller.signal }
-        );
-        if (aiResult.success && aiResult.mappings) {
-          finalMappings = filterMappingsByIntent(
-            [...finalMappings, ...aiResult.mappings],
-            scannedFields,
-            profile.fields
-          );
-        } else if (!aiResult.success) {
-          return aiResult;
-        }
-      } finally {
-        if (tabId) activeControllers.delete(tabId);
-      }
-    }
-
-    return { success: true, mappings: finalMappings };
   },
 
   BACKGROUND_PROCESS_SCAN: async (payload, sender) => {
     const tabId = sender?.tab?.id;
     if (!tabId) return { success: false, error: 'No tab id' };
 
-    // Cancellation support
-    cleanupTabRequest(tabId);
-    const controller = new AbortController();
-    activeControllers.set(tabId, controller);
-
     // Anti-Race-Condition: Keep track of the latest scan trigger per tab
     const currentScanTime = Date.now();
     if (!self.__activeBackgroundScans) self.__activeBackgroundScans = new Map();
     self.__activeBackgroundScans.set(tabId, currentScanTime);
 
-    // 1. Get User Context
-    const apiKey = await SettingsManager.getApiKey();
-    const profile = await SettingsManager.getActiveProfile();
-    const settings = await SettingsManager.getSettings();
+    // Cancellation support
+    cleanupTabRequest(tabId);
+    const controller = new AbortController();
+    activeControllers.set(tabId, controller);
 
-    // Do NOT run autonomous scan ONLY if the user has explicitly disabled Ghost Preview
-    if (settings.ghostPreviewEnabled === false || !apiKey || !profile) {
-      return { success: false, error: 'Not configured or disabled' };
-    }
+    try {
+      const result = await executeMappingCycle(payload.scannedFields, tabId, {
+        signal: controller.signal,
+        isGhost: true,
+      });
 
-    // 1. Pre-calculate THE Form Fingerprint (Stable structure)
-    // We use payload.scannedFields (ALL fields) to ensure the fingerprint is consistent
-    // even if some fields are filled.
-    const fprint = CacheManager.generateFingerprint(payload.scannedFields);
-
-    // 2. Optimization Pipeline: Identify which fields actually need filling
-    const emptyFields = FieldFilter.clean(payload.scannedFields);
-    const filteredCount = payload.scannedFields.length - emptyFields.length;
-    if (filteredCount > 0) {
-      console.log(`[LazyFill] Ignoring ${filteredCount} fields that are already filled.`);
-    }
-
-    if (emptyFields.length === 0) {
-      chrome.tabs.sendMessage(tabId, { action: 'CLEAR_GHOST_TEXT' }).catch(() => {});
-      return { success: true, count: 0, reason: 'No empty fields' };
-    }
-
-    // 3. Cache Look-up (Assembly Line 2.0)
-    // Get whatever we already know about this form structure
-    const rawCachedMappings = await CacheManager.get(fprint) || [];
-    const cachedMappings = filterMappingsByIntent(
-      CacheManager.reconcileMappings(rawCachedMappings, payload.scannedFields),
-      payload.scannedFields,
-      profile.fields
-    );
-    if (cachedMappings.length > 0) {
-      console.log(`[LazyFill] ⚡ Cache Hit: Found ${cachedMappings.length} mappings for this form.`);
-    }
-
-    // 4. Gap Detection (Healing)
-    // Find fields that are currently empty but have no mapping in our cache
-    // (This happens if the user manually filled them in a previous session or if new fields appeared)
-    const missingFields = emptyFields.filter(field => 
-      !cachedMappings.some(m => m.index === field.index)
-    );
-
-    // 5. Local Matcher Priority (Instant Healing)
-    const { localMappings, remainingFields } = LocalMatcher.findMatches(missingFields, profile.fields);
-    
-    // Combine Cache + Local Matcher for an "Instant" first-pass
-    let instantMappings = filterMappingsByIntent(
-      [...cachedMappings, ...localMappings],
-      payload.scannedFields,
-      profile.fields
-    );
-
-    // 6. Instant Local Preview
-    // We send this immediately so the user sees results without waiting for the AI
-    if (instantMappings.length > 0) {
-      console.log(`[LazyFill] 🚀 Sending Instant Preview (${instantMappings.length} fields)`);
-      chrome.tabs.sendMessage(tabId, {
-        action: 'SHOW_GHOST_TEXT',
-        payload: { mappings: instantMappings, scannedFields: payload.scannedFields }
-      }).catch(() => {});
-    }
-
-    // 7. Background Healing (AI Cycle)
-    // If we still have missing fields, call Google AI to finish the job
-    if (remainingFields.length > 0) {
-      console.log(`[LazyFill] 🤖 Cache is missing ${remainingFields.length} fields. Healing via Google AI...`);
-      try {
-        const aiResult = await AIController.generateFill(
-          apiKey, 
-          remainingFields, 
-          profile.fields, 
-          profile.name,
-          { signal: controller.signal }
-        );
-        
-        if (aiResult.success && aiResult.mappings) {
-        // Merge New AI results into our mappings
-        const finalMappings = filterMappingsByIntent(
-          [...instantMappings, ...aiResult.mappings],
-          payload.scannedFields,
-          profile.fields
-        );
-        
-        // Save the "Healed" cache back for next time
-        await CacheManager.save(fprint, finalMappings, payload.scannedFields);
-
-        // Update UI with the final complete set
-        // Check if a newer scan hijacked us first
-        if (self.__activeBackgroundScans.get(tabId) === currentScanTime) {
-          chrome.tabs.sendMessage(tabId, {
-            action: 'SHOW_GHOST_TEXT',
-            payload: { mappings: finalMappings, scannedFields: payload.scannedFields }
-          }).catch(() => {});
-          console.log(`[LazyFill] ✅ Form "Healed"! Total mappings: ${finalMappings.length}`);
-        }
-        return { success: true, count: finalMappings.length };
+      // Verify if a newer scan hijacked us first
+      if (self.__activeBackgroundScans.get(tabId) !== currentScanTime) {
+        return { success: false, reason: 'Outdated scan' };
       }
-      } finally {
-        activeControllers.delete(tabId);
-      }
-    }
-    
-    if (localMappings.length > 0) {
-      // If we healed via local matcher, update the cache so we don't even run Local Matcher next time
-      await CacheManager.save(fprint, instantMappings, payload.scannedFields);
-      console.log('[LazyFill] ✅ Form healed locally. Cache updated.');
-    } else {
-      console.log('[LazyFill] ✅ Form fully covered. No AI required.');
-    }
 
-    return { success: true, mappings: instantMappings };
+      return result;
+    } finally {
+      activeControllers.delete(tabId);
+    }
   },
 
   /* ---- SETTINGS ---- */
   SET_GHOST_PREVIEW: async (payload) => {
-    return SettingsManager.setGhostPreview(payload.enabled);
+    const res = await SettingsManager.setGhostPreview(payload.enabled);
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      clearGhostText(tab.id);
+    }
+    if (payload.enabled) {
+      if (tab?.id) checkAndGhost(tab.id);
+    }
+    return res;
+  },
+
+  SET_AUTO_FILL_MODE: async (payload) => {
+    const res = await SettingsManager.setAutoFillMode(payload.enabled);
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      clearGhostText(tab.id);
+    }
+    if (payload.enabled) {
+      if (tab?.id) checkAndGhost(tab.id);
+    }
+    return res;
   },
 
   /* ---- ERROR LOGS ---- */
@@ -437,11 +447,9 @@ const handlers = {
 async function checkAndGhost(tabId) {
   console.log('[LazyFill] Auto-ghost check for tab:', tabId);
   const settings = await SettingsManager.getSettings();
-  if (!settings.ghostPreviewEnabled) return;
-
-  const apiKey = await SettingsManager.getApiKey();
-  const profile = await SettingsManager.getActiveProfile();
-  if (!apiKey || !profile) return;
+  
+  // Scans are allowed if either Ghost Preview OR Auto-fill Mode is active
+  if (!settings.ghostPreviewEnabled && !settings.autoFillEnabled) return;
 
   // SPA Retry Logic: Try up to 3 times with 2s delays to catch lazy-loaded forms
   const MAX_RETRIES = 3;
@@ -458,7 +466,7 @@ async function checkAndGhost(tabId) {
       // Content script might not be ready yet
     }
     if (i < MAX_RETRIES) {
-      await new Promise(r => setTimeout(r, 2500));
+      await new Promise((r) => setTimeout(r, 2500));
     }
   }
 
@@ -467,32 +475,21 @@ async function checkAndGhost(tabId) {
     return;
   }
 
-  // 2. Consult AI
+  // Anti-Race-Condition: Navigation trigger counts as an active scan
+  const currentScanTime = Date.now();
+  if (!self.__activeBackgroundScans) self.__activeBackgroundScans = new Map();
+  self.__activeBackgroundScans.set(tabId, currentScanTime);
+
+  // Cancellation support
   cleanupTabRequest(tabId);
   const controller = new AbortController();
   activeControllers.set(tabId, controller);
 
   try {
-    // 2. Consult AI
-    const aiRes = await AIController.generateFill(
-      apiKey, 
-      scanRes.scannedFields, 
-      profile.fields, 
-      profile.name,
-      { signal: controller.signal }
-    );
-
-    // 3. Show Ghost Text
-    if (aiRes.success && aiRes.mappings?.length) {
-      console.log(`[LazyFill] AI returned ${aiRes.mappings.length} mappings. Showing ghosts...`);
-      await chrome.tabs.sendMessage(tabId, {
-        action: 'SHOW_GHOST_TEXT',
-        payload: { 
-          mappings: aiRes.mappings, 
-          scannedFields: scanRes.scannedFields 
-        }
-      });
-    }
+    await executeMappingCycle(scanRes.scannedFields, tabId, {
+      signal: controller.signal,
+      isGhost: true,
+    });
   } catch (err) {
     if (err.name === 'AbortError') {
       console.log('[LazyFill] Autonomous scan cancelled.');
