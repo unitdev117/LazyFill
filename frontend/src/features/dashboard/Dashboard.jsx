@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useChromeStorage } from '@/hooks/useChromeStorage';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { Scan, Ghost, ChevronDown, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { Scan, Ghost, ChevronDown, CheckCircle2, AlertCircle, Loader2, Power, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function Dashboard() {
@@ -39,6 +39,37 @@ export function Dashboard() {
   const [status, setStatus] = useState({ state: 'ready', message: 'Ready to scan' });
   const [stats, setStats] = useState({ found: 0, fillable: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Master power switch — OFF by default at the start of every browser session.
+  const [masterEnabled, setMasterEnabled] = useState(false);
+  const [pendingEnable, setPendingEnable] = useState(false);
+
+  useEffect(() => {
+    chrome.runtime.sendMessage({ action: 'GET_MASTER_STATE' }, (res) => {
+      if (chrome.runtime.lastError) return;
+      if (res?.success) setMasterEnabled(!!res.enabled);
+    });
+  }, []);
+
+  const applyMaster = (enabled) => {
+    chrome.runtime.sendMessage({ action: 'SET_MASTER_STATE', payload: { enabled } }, (res) => {
+      if (chrome.runtime.lastError) return;
+      setMasterEnabled(!!res?.enabled);
+      if (!res?.enabled) {
+        setStatus({ state: 'ready', message: 'LazyFill is off' });
+      } else {
+        setStatus({ state: 'ready', message: 'Ready to scan' });
+      }
+    });
+  };
+
+  const handleMasterToggle = () => {
+    if (masterEnabled) {
+      applyMaster(false);          // turning off needs no confirmation
+    } else {
+      setPendingEnable(true);      // turning on shows a one-time usage warning
+    }
+  };
 
   const safeProfiles = Array.isArray(profiles) ? profiles.filter(Boolean) : [];
   const activeProfile = safeProfiles.find(p => p.id === activeProfileId);
@@ -92,6 +123,11 @@ export function Dashboard() {
   }, []);
 
   const handleCompleteAutoFill = async () => {
+    if (!masterEnabled) {
+      setStatus({ state: 'error', message: 'Turn LazyFill on first' });
+      return;
+    }
+
     setIsProcessing(true);
     setStatus({ state: 'scanning', message: 'Analyzing page...' });
 
@@ -120,6 +156,16 @@ export function Dashboard() {
           else resolve(res);
         });
       });
+
+      if (scanRes?.blocked) {
+        setStatus({
+          state: 'error',
+          message: scanRes.blockCode === 'disabled'
+            ? 'You disabled LazyFill here'
+            : 'Disabled on banking & secure sites',
+        });
+        return;
+      }
 
       if (!scanRes?.success || scanRes.count === 0) {
         setStatus({ state: 'error', message: 'No fields found' });
@@ -183,6 +229,44 @@ export function Dashboard() {
 
   return (
     <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      {/* Master Power Switch */}
+      <div className={cn(
+        "flex items-center justify-between p-4 px-5 rounded-[22px] border transition-colors",
+        masterEnabled
+          ? "bg-primary/10 border-primary/30"
+          : "bg-card/40 border-white/10"
+      )}>
+        <div className="flex items-center gap-3">
+          <div className={cn(
+            "w-9 h-9 rounded-xl flex items-center justify-center transition-colors",
+            masterEnabled ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+          )}>
+            <Power size={18} />
+          </div>
+          <div className="space-y-0.5">
+            <p className="text-sm font-bold tracking-tight">
+              LazyFill is {masterEnabled ? 'ON' : 'OFF'}
+            </p>
+            <p className="text-[10px] text-muted-foreground font-medium">
+              {masterEnabled ? 'Active for this session' : 'Switch on to start filling'}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={handleMasterToggle}
+          aria-label="Toggle LazyFill"
+          className={cn(
+            "w-12 h-6 rounded-full transition-all duration-300 relative flex items-center px-1 shrink-0",
+            masterEnabled ? "bg-primary" : "bg-muted"
+          )}
+        >
+          <div className={cn(
+            "w-4 h-4 rounded-full bg-white shadow-md transition-all duration-300",
+            masterEnabled ? "translate-x-6" : "translate-x-0"
+          )} />
+        </button>
+      </div>
+
       {/* Status Bar */}
       <div className="flex items-center justify-between mb-2 px-1">
         <div className="flex items-center gap-2">
@@ -232,11 +316,11 @@ export function Dashboard() {
 
       {/* Main Action Button - Minimalist Redesign */}
       <div className="pt-2">
-        <Button 
+        <Button
           onClick={handleCompleteAutoFill}
-          disabled={isProcessing}
+          disabled={isProcessing || !masterEnabled}
           className={cn(
-            "w-full h-14 rounded-2xl border border-primary/20 shadow-xl transition-all active:scale-95 disabled:opacity-70 font-outfit font-black text-sm tracking-widest uppercase italic",
+            "w-full h-14 rounded-2xl border border-primary/20 shadow-xl transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed font-outfit font-black text-sm tracking-widest uppercase italic",
             status.state === 'success' ? "bg-emerald-600/20 text-emerald-500 border-emerald-500/30" : "bg-primary/10 text-primary hover:bg-primary/20"
           )}
         >
@@ -245,6 +329,8 @@ export function Dashboard() {
               <Loader2 size={16} className="animate-spin" />
               <span>Analyzing...</span>
             </div>
+          ) : !masterEnabled ? (
+            'Switch LazyFill On'
           ) : (
             'Complete Auto Fill'
           )}
@@ -291,6 +377,40 @@ export function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* One-time usage warning shown when switching LazyFill ON */}
+      {pendingEnable && (
+        <div className="fixed inset-0 z-[60] bg-background/85 backdrop-blur-sm flex items-center justify-center p-5">
+          <Card className="w-full max-w-sm mx-auto p-5 space-y-4 shadow-2xl border-primary/20 bg-card/95 backdrop-blur-md">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-primary/20 text-primary flex items-center justify-center shrink-0">
+                <Zap size={18} />
+              </div>
+              <p className="text-base font-black tracking-tight">Turn LazyFill on?</p>
+            </div>
+            <p className="text-xs text-muted-foreground font-medium leading-relaxed">
+              While on, LazyFill keeps scanning pages and suggesting values for the rest of
+              this browser session, which uses your AI API quota. Switch it off when you
+              don't need it. It stays off automatically the next time you start your browser.
+            </p>
+            <div className="flex gap-3 pt-1">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setPendingEnable(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1 bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20"
+                onClick={() => { setPendingEnable(false); applyMaster(true); }}
+              >
+                Turn On
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,7 +9,7 @@
  * ============================================================
  */
 
-import { handleError } from '../../util/errors/error_handler.js';
+import { handleError } from '../util/error_handler.js';
 import aiQueue from '../queues/ai_queue.js';
 
 const GOOGLE_AI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -117,9 +117,10 @@ RULES:
 4. For <select> fields, the "value" must be one of the option values listed.
 5. If no profile data reasonably matches a field, OMIT that field from the output.
 6. SECURITY/ACCURACY RULE: Do NOT map numeric IDs, account numbers, or bill numbers to common text fields like "City", "Name", or "Address" unless the profile key explicitly contains those words.
-7. If in doubt, omit the field. It is better to leave it empty than to fill it with incorrect data.
-8. Do NOT invent data that is not in the profile.
-9. Do NOT include any explanation - ONLY the JSON array.
+7. SECURITY RULE: NEVER fill credential, payment, or identity-secret fields. If a field is a password, OTP / one-time code, 2FA/MFA code, credit/debit card number, CVV/CVC, card expiry, SSN, tax ID, passport, or bank account/routing number, OMIT it — even if the profile happens to contain a similar value.
+8. If in doubt, omit the field. It is better to leave it empty than to fill it with incorrect data.
+9. Do NOT invent data that is not in the profile.
+10. Do NOT include any explanation - ONLY the JSON array.
 
 OUTPUT:`;
   },

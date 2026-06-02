@@ -10,11 +10,16 @@
  * ============================================================
  */
 
+import { isSensitiveSite, getBlockReason } from '../shared/guards.js';
+
 (function () {
   'use strict';
 
   // Only run in the top-level window — not inside iframes
   if (window !== window.top) return;
+
+  // Never observe / scan banking or other secure sites.
+  if (isSensitiveSite()) return;
 
   if (window.__lazyFillObserverLoaded) return;
   window.__lazyFillObserverLoaded = true;
@@ -26,7 +31,6 @@
     'input[type="email" i]',
     'input[type="url" i]',
     'input[type="tel" i]',
-    'input[type="password" i]',
     'textarea',
     '[contenteditable=""]',
     '[contenteditable="true"]',
@@ -43,6 +47,11 @@
   const MAX_FIELD_POLLS = 8;    // 8 × 2s = 16s of patience for slow React apps
 
   function triggerBackgroundScan() {
+    // Skip entirely if the user disabled LazyFill for this site (or it's secure).
+    // Checked here (not just at init) because the disabled-list cache may load
+    // after the observer starts.
+    if (getBlockReason()) return;
+
     // Guard: wait until scanner.js has registered its global object
     if (!window.__lazyFillScanner || !window.__lazyFillScanner.performScan) {
       if (scannerReadyPolls < MAX_SCANNER_POLLS) {

@@ -39,6 +39,8 @@ Ghost Preview is the suggestion mode. Instead of filling the form immediately, L
 
 This is useful when the user wants more control and wants to see suggestions before they become actual input values.
 
+If you agree with the suggestions, you can press Tab in the text box area to accept the suggestions.
+
 ### Auto-fill Mode
 
 Auto-fill Mode is the direct mode. When it is turned on, LazyFill fills supported fields right after the scan instead of waiting for a separate confirmation step.

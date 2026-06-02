@@ -14,10 +14,10 @@
  * ============================================================
  */
 
+import { getBlockReason } from '../shared/guards.js';
+
 (function () {
   'use strict';
-  console.log('[LazyFill] Ghost Text module initializing...');
-
   console.log('[LazyFill] Ghost Text module initializing...');
 
   window.__lazyFillGhostTextLoaded = true;
@@ -25,6 +25,70 @@
   const ghostState = new Map();
   let lastMappings = null;
   let lastScannedFields = null;
+
+  /* --------------------------------------------------
+   *  REPOSITION MANAGER (single rAF-batched pass)
+   * --------------------------------------------------
+   *  One shared scroll/resize listener reschedules a SINGLE
+   *  requestAnimationFrame that repositions every active overlay,
+   *  instead of each overlay attaching its own listeners and
+   *  reading layout on every scroll event (which thrashes layout
+   *  on heavy SPAs). An IntersectionObserver hides overlays whose
+   *  field has scrolled out of view.
+   * -------------------------------------------------- */
+
+  let rafId = null;
+  let globalListenersAttached = false;
+
+  function repositionAll() {
+    rafId = null;
+    const scrollX = window.scrollX || window.pageXOffset;
+    const scrollY = window.scrollY || window.pageYOffset;
+    ghostState.forEach((state) => {
+      const { el, overlay } = state;
+      if (!overlay || !overlay.parentNode || !el || !el.isConnected) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        overlay.style.display = 'none';
+        return;
+      }
+      overlay.style.display = '';
+      overlay.style.left = `${rect.left + scrollX}px`;
+      overlay.style.top = `${rect.top + scrollY}px`;
+      overlay.style.width = `${rect.width}px`;
+      overlay.style.height = `${rect.height}px`;
+    });
+  }
+
+  function scheduleReposition() {
+    if (rafId != null) return;
+    rafId = requestAnimationFrame(repositionAll);
+  }
+
+  const visibilityObserver =
+    typeof IntersectionObserver !== 'undefined'
+      ? new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              for (const state of ghostState.values()) {
+                if (state.el === entry.target && state.overlay) {
+                  state.overlay.style.visibility = entry.isIntersecting ? '' : 'hidden';
+                  break;
+                }
+              }
+            }
+          },
+          { threshold: 0 }
+        )
+      : null;
+
+  function ensureGlobalListeners() {
+    if (globalListenersAttached) return;
+    globalListenersAttached = true;
+    // capture:true also catches scrolling of inner scroll containers.
+    window.addEventListener('scroll', scheduleReposition, { passive: true, capture: true });
+    window.addEventListener('resize', scheduleReposition, { passive: true });
+  }
 
   /* --------------------------------------------------
    *  INJECT STYLESHEET
@@ -131,53 +195,34 @@
 
     // Remove any existing overlay for this element first
     if (ghostState.has(key)) {
-      const old = ghostState.get(key);
-      if (old.overlay && old.overlay.parentNode) old.overlay.remove();
-      ghostState.delete(key);
+      forgetGhost(key, ghostState.get(key));
     }
 
     const overlay = createOverlay(el, suggestion);
 
     ghostState.set(key, { el, overlay, suggestedValue: suggestion });
 
-    // Reposition if window scrolls or resizes
-    const reposition = () => {
-      const rect = el.getBoundingClientRect();
-      const scrollX = window.scrollX || window.pageXOffset;
-      const scrollY = window.scrollY || window.pageYOffset;
-      overlay.style.left = `${rect.left + scrollX}px`;
-      overlay.style.top = `${rect.top + scrollY}px`;
-      overlay.style.width = `${rect.width}px`;
-      overlay.style.height = `${rect.height}px`;
-    };
+    // One shared listener set + one rAF-batched reposition for all overlays.
+    ensureGlobalListeners();
+    if (visibilityObserver) visibilityObserver.observe(el);
+    scheduleReposition();
+  }
 
-    window.addEventListener('scroll', reposition, { passive: true });
-    window.addEventListener('resize', reposition, { passive: true });
-
-    // Cleanup listeners when overlay is removed
-    const observer = new MutationObserver(() => {
-      if (!overlay.parentNode) {
-        observer.disconnect();
-        window.removeEventListener('scroll', reposition);
-        window.removeEventListener('resize', reposition);
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: false });
+  // Remove an overlay, stop observing its field, and drop it from state.
+  function forgetGhost(key, state) {
+    if (!state) return;
+    if (visibilityObserver && state.el) visibilityObserver.unobserve(state.el);
+    if (state.overlay && state.overlay.parentNode) state.overlay.remove();
+    ghostState.delete(key);
   }
 
   function clearGhost(el) {
     const key = getElementKey(el);
-    const state = ghostState.get(key);
-    if (state) {
-      if (state.overlay && state.overlay.parentNode) state.overlay.remove();
-      ghostState.delete(key);
-    }
+    forgetGhost(key, ghostState.get(key));
   }
 
   function clearAllGhosts() {
-    ghostState.forEach((state) => {
-      if (state.overlay && state.overlay.parentNode) state.overlay.remove();
-    });
+    ghostState.forEach((state, key) => forgetGhost(key, state));
     ghostState.clear();
   }
 
@@ -215,9 +260,8 @@
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
-    // Remove overlay
-    if (state.overlay && state.overlay.parentNode) state.overlay.remove();
-    ghostState.delete(key);
+    // Remove overlay + stop observing the field
+    forgetGhost(key, state);
 
     // Visual pulse feedback on the input
     el.classList.add('lazyfill-committed');
@@ -321,6 +365,7 @@
     
     // Centralized Listener Bridge methods
     showGhostBatch: (mappings, scannedFields) => {
+      if (getBlockReason()) return 0;
       lastMappings = mappings;
       lastScannedFields = scannedFields;
       clearAllGhosts();

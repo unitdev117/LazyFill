@@ -8,6 +8,11 @@
  * ============================================================
  */
 
+// Shared, unit-tested classifiers (live in the extension's shared dir;
+// local_matcher is extension-only code, not used by the Node server).
+import { isFillableFieldMeta } from '../../frontend/src/shared/field-classification.js';
+import { inferFieldIntent, inferProfileKeyIntent } from '../../frontend/src/shared/field-semantics.js';
+
 const LocalMatcher = {
   _normalizeAttribute(value) {
     return (value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -44,59 +49,7 @@ const LocalMatcher = {
   },
 
   _isPureTextField(field) {
-    if (!field || typeof field !== 'object') return false;
-
-    const tagName = (field.tagName || '').toLowerCase();
-    const type = (field.type || '').toLowerCase();
-    const role = (field.role || '').toLowerCase();
-    const placeholder = (field.placeholder || '').trim().toLowerCase();
-    const domPath = (field.domPath || '').toLowerCase();
-
-    const allowedInputTypes = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password']);
-    const disallowedTags = new Set(['select', 'option', 'optgroup', 'datalist']);
-    const disallowedRoles = new Set([
-      'combobox',
-      'listbox',
-      'option',
-      'menu',
-      'menuitem',
-      'tree',
-      'treeitem',
-      'grid',
-      'button',
-      'checkbox',
-      'radio',
-      'switch',
-      'tab',
-      'slider',
-      'spinbutton',
-    ]);
-
-    if (disallowedTags.has(tagName) || disallowedRoles.has(role)) {
-      return false;
-    }
-
-    if (field.hasListAttribute) {
-      return false;
-    }
-
-    if (/^(select|choose)\b/.test(placeholder)) {
-      return false;
-    }
-
-    if (/\b(dropdown|picker|autocomplete|combo-?box|select-?input|select-?module)\b/.test(domPath)) {
-      return false;
-    }
-
-    if (tagName === 'textarea' || tagName === 'contenteditable') {
-      return true;
-    }
-
-    if (tagName === 'input') {
-      return allowedInputTypes.has(type);
-    }
-
-    return false;
+    return isFillableFieldMeta(field);
   },
 
   /**
@@ -167,9 +120,10 @@ const LocalMatcher = {
         }
       }
 
-      // 3. Fallback: Common industrial aliases if the dynamic label is a standard one
+      // 3. Fallback: semantic-category match (same category table the background
+      //    uses to validate AI mappings, so matching and validation agree).
       if (!matchedKey) {
-        matchedKey = this._checkStandardAliases(attributes, profileFields);
+        matchedKey = this._matchByIntent(field, profileKeys, profileFields);
       }
 
       if (matchedKey) {
@@ -187,25 +141,23 @@ const LocalMatcher = {
   },
 
   /**
-   * Hardcoded fallbacks for very common web shorthand (e.g. 'fname' -> 'First Name')
-   * only triggered if the profile has that standard key.
+   * Semantic-category fallback: classify the field's intent and match it to a
+   * profile key of the same category (that actually has a value). Uses the
+   * shared semantics table, so a field matched here will also pass the
+   * background's intent validation — no "matched locally, rejected later".
+   * @param {Object} field
+   * @param {Array<{original:string, normalized:string}>} profileKeys
+   * @param {Object} profileFields
+   * @returns {string|null} the matching profile key, or null
    */
-  _checkStandardAliases(attributes, profileFields) {
-    const aliasRules = [
-      { key: 'First Name', aliases: ['fname', 'givenname'] },
-      { key: 'Last Name', aliases: ['lname', 'surname', 'familyname'] },
-      { key: 'Phone', aliases: ['tel', 'mobile', 'cell', 'contact'] },
-      { key: 'Zip Code', aliases: ['zip', 'postal', 'pincode'] }
-    ];
+  _matchByIntent(field, profileKeys, profileFields) {
+    const fieldIntent = inferFieldIntent(field);
+    if (!fieldIntent) return null;
 
-    for (const rule of aliasRules) {
-      if (profileFields[rule.key]) {
-        if (rule.aliases.some(alias => attributes.some(attr => attr.includes(alias)))) {
-          return rule.key;
-        }
-      }
-    }
-    return null;
+    const match = profileKeys.find(
+      (key) => profileFields[key.original] && inferProfileKeyIntent(key.original) === fieldIntent
+    );
+    return match ? match.original : null;
   }
 };
 

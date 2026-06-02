@@ -28,6 +28,10 @@ if (!process.env.JWT_SECRET) {
   throw new Error(`Missing JWT_SECRET. Expected it in ${envPath}`);
 }
 
+if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length !== 64) {
+  throw new Error(`Missing or invalid ENCRYPTION_KEY in ${envPath}. Expected 32-byte hex string (64 chars).`);
+}
+
 const fastify = Fastify({
   logger: true,
 });

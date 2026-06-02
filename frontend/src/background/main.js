@@ -13,17 +13,85 @@
 
 import SettingsManager from './services/settings.js';
 import AIController from '../../../backend/controllers/ai_controller.js';
-import { handleError } from '../../../util/errors/error_handler.js';
+import { handleError } from '../util/error_handler.js';
 import db from '../../../backend/database/db_adapter.js';
 
 // Optimization Services
 import FieldFilter from '../../../backend/services/field_filter.js';
 import CacheManager from '../../../backend/services/cache_manager.js';
 import LocalMatcher from '../../../backend/services/local_matcher.js';
-import aiQueue from '../../../backend/queues/ai_queue.js';
+import { inferFieldIntent, inferProfileKeyIntent } from '../shared/field-semantics.js';
 
 // Global map to track active AI requests per tab for cancellation
 const activeControllers = new Map();
+
+/* -------------------------------------------------------
+ *  MASTER POWER SWITCH (session-scoped)
+ * -------------------------------------------------------
+ *  LazyFill stays OFF by default at the start of every browser
+ *  session and only runs after the user explicitly turns it on
+ *  from the popup. We store the flag in chrome.storage.session,
+ *  which is automatically cleared when the browser restarts — so
+ *  "off on every browser start" requires no extra bookkeeping.
+ *  When OFF, nothing scans, suggests, or fills (no AI usage).
+ */
+
+const MASTER_KEY = 'masterEnabled';
+
+async function isMasterEnabled() {
+  try {
+    const result = await chrome.storage.session.get(MASTER_KEY);
+    return result[MASTER_KEY] === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function setMasterEnabled(enabled) {
+  try {
+    await chrome.storage.session.set({ [MASTER_KEY]: enabled === true });
+  } catch (err) {
+    console.warn('[LazyFill] Failed to persist master state:', err.message);
+  }
+}
+
+/* -------------------------------------------------------
+ *  USER DISABLED LIST (whole-domain, user-driven)
+ * -------------------------------------------------------
+ *  Authoritative guard for the autonomous AI path. The list is
+ *  whatever the user added from the popup's "Disabled" section
+ *  (nothing hardcoded). A stored host disables the COMPLETE site
+ *  — every path and every subdomain.
+ */
+
+const DISABLED_SITES_KEY = 'lazyfill_disabled_sites';
+
+function normalizeHost(host) {
+  return (host || '').toString().toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+}
+
+function hostFromUrl(url) {
+  try {
+    return new URL(url).hostname;
+  } catch (_) {
+    return '';
+  }
+}
+
+async function isUrlDisabled(url) {
+  const current = normalizeHost(hostFromUrl(url));
+  if (!current) return false;
+  try {
+    const res = await chrome.storage.local.get([DISABLED_SITES_KEY]);
+    const list = Array.isArray(res[DISABLED_SITES_KEY]) ? res[DISABLED_SITES_KEY] : [];
+    return list.some((entry) => {
+      const d = normalizeHost(entry);
+      return d && (current === d || current.endsWith('.' + d));
+    });
+  } catch (_) {
+    return false;
+  }
+}
 
 /**
  * Cleanup and abort any pending AI calls for a specific tab.
@@ -37,57 +105,18 @@ function cleanupTabRequest(tabId) {
   }
 }
 
-function normalizeIntentText(value) {
-  return (value || '').toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
-}
-
-function detectIntent(text) {
-  const normalized = normalizeIntentText(text);
-  if (!normalized) return null;
-
-  const intentRules = [
-    { intent: 'email', pattern: /\b(e ?mail|email)\b/ },
-    { intent: 'phone', pattern: /\b(phone|mobile|cell|telephone|tel|contact number)\b/ },
-    { intent: 'city', pattern: /\b(city|town|locality)\b/ },
-    { intent: 'state', pattern: /\b(state|province|region|county)\b/ },
-    { intent: 'zip', pattern: /\b(zip|postal|postcode|pincode)\b/ },
-    { intent: 'country', pattern: /\b(country|nationality)\b/ },
-    { intent: 'address', pattern: /\b(address|street|address line)\b/ },
-    { intent: 'first_name', pattern: /\b(first name|given name|forename|fname)\b/ },
-    { intent: 'last_name', pattern: /\b(last name|surname|family name|lname)\b/ },
-    { intent: 'full_name', pattern: /\b(full name|name)\b/ },
-  ];
-
-  const match = intentRules.find((rule) => rule.pattern.test(normalized));
-  return match ? match.intent : null;
-}
-
-function getFieldIntent(field) {
-  if (!field) return null;
-
-  return detectIntent([
-    field.label,
-    field.placeholder,
-    field.ariaLabel,
-    field.autocomplete,
-    field.name,
-    field.id,
-  ].join(' '));
-}
-
-function getProfileKeyIntent(profileKey) {
-  return detectIntent(profileKey);
-}
+// Field/profile-key semantics come from the shared, unit-tested module so
+// that local matching and this post-AI validation use the SAME category table.
 
 function getMatchingProfileKeyIntents(mapping, profileFields) {
   if (mapping.profileKey) {
-    const intent = getProfileKeyIntent(mapping.profileKey);
+    const intent = inferProfileKeyIntent(mapping.profileKey);
     return intent ? [intent] : [];
   }
 
   const matchedKeys = Object.entries(profileFields)
     .filter(([, value]) => value === mapping.value)
-    .map(([key]) => getProfileKeyIntent(key))
+    .map(([key]) => inferProfileKeyIntent(key))
     .filter(Boolean);
 
   return [...new Set(matchedKeys)];
@@ -102,7 +131,7 @@ function filterMappingsByIntent(mappings, scannedFields, profileFields) {
     const field = scannedFields[mapping.index];
     if (!field) return false;
 
-    const fieldIntent = getFieldIntent(field);
+    const fieldIntent = inferFieldIntent(field);
     if (!fieldIntent) return true;
 
     const profileKeyIntents = getMatchingProfileKeyIntents(mapping, profileFields);
@@ -222,13 +251,20 @@ async function executeMappingCycle(scannedFields, tabId, options = {}) {
             }).catch(() => {});
           }
         }
-      } else if (!aiResult.success && !options.isGhost) {
-        // Only return AI error if this is a manual autofill request
-        return aiResult;
+      } else if (!aiResult.success) {
+        // Log to extension DB since AIController backend handler doesn't persist to chrome.storage
+        await handleError(aiResult.error || aiResult, 'background.executeMappingCycle.ai_failure');
+        
+        if (!options.isGhost) {
+          // Only return AI error back to UI if this is a manual autofill request
+          return aiResult;
+        }
       }
     } catch (err) {
       if (err.name === 'AbortError') throw err;
       console.warn('[LazyFill] Mapping cycle AI failed:', err.message);
+      // Explicitly log to extension DB since AIController now uses the clean backend handler
+      await handleError(err, 'background.executeMappingCycle.ai_healing');
     }
   } else if (localMappings.length > 0) {
     // If we healed via local matcher, update the cache so we don't even run Local Matcher next time
@@ -323,6 +359,33 @@ const handlers = {
     return { success: true, settings };
   },
 
+  /* ---- MASTER POWER SWITCH ---- */
+  GET_MASTER_STATE: async () => {
+    return { success: true, enabled: await isMasterEnabled() };
+  },
+
+  SET_MASTER_STATE: async (payload) => {
+    const enabled = payload?.enabled === true;
+    await setMasterEnabled(enabled);
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (enabled) {
+      // Kick off an immediate pass on the current tab so suggestions appear.
+      if (tab?.id && tab.url?.startsWith('http')) {
+        checkAndGhost(tab.id);
+      }
+    } else {
+      // Turning off: abort any in-flight AI work and clear existing suggestions.
+      for (const pendingTabId of Array.from(activeControllers.keys())) {
+        cleanupTabRequest(pendingTabId);
+      }
+      if (tab?.id) clearGhostText(tab.id);
+    }
+
+    return { success: true, enabled };
+  },
+
   /* ---- AI AUTOFILL ---- */
   TRIGGER_SCAN: async (_payload, sender) => {
     // Inject the content script scan function into the active tab
@@ -345,6 +408,15 @@ const handlers = {
   },
 
   PROCESS_SCAN_RESULTS: async (payload, sender) => {
+    // Master switch gate — manual autofill is also disabled while LazyFill is off.
+    if (!(await isMasterEnabled())) {
+      return {
+        success: false,
+        masterOff: true,
+        error: { message: 'LazyFill is off. Turn it on from the popup to use autofill.' },
+      };
+    }
+
     const tabId = sender?.tab?.id;
     const { scannedFields } = payload;
 
@@ -364,6 +436,16 @@ const handlers = {
   },
 
   BACKGROUND_PROCESS_SCAN: async (payload, sender) => {
+    // Master switch gate — ignore passive observer scans while LazyFill is off.
+    if (!(await isMasterEnabled())) {
+      return { success: false, masterOff: true, reason: 'LazyFill is off' };
+    }
+
+    // User disabled-list gate.
+    if (await isUrlDisabled(sender?.tab?.url)) {
+      return { success: false, disabled: true, reason: 'Site disabled by user' };
+    }
+
     const tabId = sender?.tab?.id;
     if (!tabId) return { success: false, error: 'No tab id' };
 
@@ -445,6 +527,15 @@ const handlers = {
  * ------------------------------------------------------- */
 
 async function checkAndGhost(tabId) {
+  // Master switch gate — do nothing until the user turns LazyFill on.
+  if (!(await isMasterEnabled())) return;
+
+  // User disabled-list gate — never run on a site the user turned off.
+  const tabInfo = await chrome.tabs.get(tabId).catch(() => null);
+  if (tabInfo && (await isUrlDisabled(tabInfo.url))) {
+    return;
+  }
+
   console.log('[LazyFill] Auto-ghost check for tab:', tabId);
   const settings = await SettingsManager.getSettings();
   
@@ -562,6 +653,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 /* -------------------------------------------------------
  *  INSTALL / UPDATE HOOKS
  * ------------------------------------------------------- */
+
+// Force the master switch OFF whenever a new browser session begins.
+// (chrome.storage.session is already cleared on restart; this is belt-and-suspenders.)
+chrome.runtime.onStartup.addListener(() => {
+  setMasterEnabled(false);
+});
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install') {

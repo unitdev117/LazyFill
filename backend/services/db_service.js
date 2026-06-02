@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { DEFAULT_USER_SETTINGS } from '../schema/index.js';
+import { encrypt, decrypt } from '../util/crypto.js';
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
@@ -30,7 +31,7 @@ function buildAuthPayload(user, profiles = []) {
     tokenVersion: user.tokenVersion,
     state: {
       profiles,
-      apiKey: user.apiKey || '',
+      apiKey: decrypt(user.apiKey) || '',
       settings: normalizeSettings(user.settings),
     },
   };
@@ -49,7 +50,7 @@ export const AuthService = {
       email: normalizedEmail,
       displayName: buildDisplayName(normalizedEmail),
       passwordHash,
-      apiKey,
+      apiKey: encrypt(apiKey),
       settings,
     });
     const savedProfiles = await profileRepo.replaceAllForUser(normalizedEmail, profiles);
@@ -118,14 +119,14 @@ export const SyncService = {
       : (user.settings || {});
 
     await userRepo.updateSyncState(normalizedEmail, {
-      apiKey: nextApiKey,
+      apiKey: encrypt(nextApiKey),
       settings: nextSettings,
     });
 
     const updatedUser = await userRepo.findByEmail(normalizedEmail);
     return {
       profiles: nextProfiles,
-      apiKey: updatedUser.apiKey || '',
+      apiKey: decrypt(updatedUser.apiKey) || '',
       settings: normalizeSettings(updatedUser.settings),
     };
   },
@@ -140,7 +141,7 @@ export const SyncService = {
     const profiles = await profileRepo.getAllByUserId(normalizedEmail);
     return {
       profiles,
-      apiKey: user.apiKey || '',
+      apiKey: decrypt(user.apiKey) || '',
       settings: normalizeSettings(user.settings),
     };
   },

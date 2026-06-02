@@ -12,107 +12,31 @@
  * ============================================================
  */
 
+import { getBlockReason, isSensitiveField } from '../shared/guards.js';
+import {
+  TEXT_ENTRY_SELECTOR,
+  ALLOWED_INPUT_TYPES as TEXT_ENTRY_INPUT_TYPES,
+  EXCLUDED_INPUT_TYPES,
+  DISALLOWED_TAGS,
+  DISALLOWED_ROLES,
+  CHOICE_PLACEHOLDER_PATTERN,
+  getRole,
+  hasAllowedContentEditableValue,
+  hasMeaningfulAriaAttribute,
+  hasChoiceWidgetContainer,
+} from '../../shared/field-classification.js';
+
 (function () {
   'use strict';
-  console.log('[LazyFill] Scanner module initializing...');
-
   console.log('[LazyFill] Scanner module initializing...');
 
   window.__lazyFillScannerLoaded = true;
 
   /* --------------------------------------------------
    *  FIELD EXTRACTION
+   *  (rule constants + DOM helpers come from the shared,
+   *   unit-tested field-classification module)
    * -------------------------------------------------- */
-
-  const TEXT_ENTRY_SELECTOR = [
-    'input:not([type])',
-    'input[type="text" i]',
-    'input[type="search" i]',
-    'input[type="email" i]',
-    'input[type="url" i]',
-    'input[type="tel" i]',
-    'input[type="password" i]',
-    'textarea',
-    '[contenteditable=""]',
-    '[contenteditable="true"]',
-    '[contenteditable="plaintext-only"]',
-    '[role="textbox"]',
-  ].join(', ');
-
-  const TEXT_ENTRY_INPUT_TYPES = new Set([
-    '',
-    'text',
-    'search',
-    'email',
-    'url',
-    'tel',
-    'password',
-  ]);
-
-  const DISALLOWED_TAGS = new Set(['select', 'option', 'optgroup', 'datalist']);
-  const DISALLOWED_ROLES = new Set([
-    'combobox',
-    'listbox',
-    'option',
-    'menu',
-    'menuitem',
-    'tree',
-    'treeitem',
-    'grid',
-    'button',
-    'checkbox',
-    'radio',
-    'switch',
-    'tab',
-    'slider',
-    'spinbutton',
-  ]);
-  const CHOICE_PLACEHOLDER_PATTERN = /^(select|choose)\b/i;
-  const CHOICE_WIDGET_CLASS_PATTERN = /\b(dropdown|picker|autocomplete|combo-?box|select-?input|select-?module)\b/i;
-
-  const EXCLUDED_INPUT_TYPES = new Set([
-    'hidden',
-    'submit',
-    'button',
-    'reset',
-    'image',
-    'file',
-  ]);
-
-  function getRole(el) {
-    return (el.getAttribute('role') || '').trim().toLowerCase();
-  }
-
-  function getExplicitContentEditableValue(el) {
-    const value = el.getAttribute('contenteditable');
-    return value == null ? null : value.trim().toLowerCase();
-  }
-
-  function hasAllowedContentEditableValue(el) {
-    const value = getExplicitContentEditableValue(el);
-    return value === '' || value === 'true' || value === 'plaintext-only';
-  }
-
-  function hasMeaningfulAriaAttribute(el, attrName) {
-    const value = el.getAttribute(attrName);
-    if (value == null) return false;
-
-    const normalized = value.trim().toLowerCase();
-    return normalized !== '' && normalized !== 'false' && normalized !== 'none';
-  }
-
-  function hasChoiceWidgetContainer(el) {
-    let current = el;
-    for (let depth = 0; current && depth < 5; depth++) {
-      const className = typeof current.className === 'string' ? current.className : '';
-      const identifier = `${current.id || ''} ${className}`;
-      if (CHOICE_WIDGET_CLASS_PATTERN.test(identifier)) {
-        return true;
-      }
-      current = current.parentElement;
-    }
-    return false;
-  }
 
   function isTextEntryPrimitive(el) {
     const tagName = el.tagName.toLowerCase();
@@ -235,9 +159,11 @@
       }
       pathFingerprint.push(nodeStr);
       
-      // Attempt to gather focused contextual text (not the entire page)
+      // Attempt to gather focused contextual text (not the entire page).
+      // Use textContent (not innerText) to avoid forcing a layout reflow on
+      // every ancestor of every field — a real hot path on large forms.
       if (!surroundingText && depth >= 1 && depth <= 4) {
-         let text = (parent.innerText || parent.textContent || '').replace(/\s+/g, ' ').trim();
+         let text = (parent.textContent || '').replace(/\s+/g, ' ').trim();
          // Ensure the text isn't massive (which means we grabbed too high up the tree)
          if (text && text.length > 2 && text.length < 250) {
            surroundingText = text;
@@ -291,6 +217,9 @@
       domPath: domContext.path,
       surroundingText: domContext.surroundingText
     };
+
+    // Never expose credential / payment / identity fields to the AI or filler.
+    if (isSensitiveField(field)) return null;
 
     return field;
   }
@@ -467,6 +396,9 @@
    * -------------------------------------------------- */
 
   function performScan() {
+    // Safety gate: skip secure sites AND any site the user has disabled.
+    if (getBlockReason()) return [];
+
     const fields = scanNode(document);
 
     // Assign stable indices
@@ -501,6 +433,18 @@
     // 1. Scanner Actions
     if (action === 'SCAN_PAGE') {
       try {
+        const block = getBlockReason();
+        if (block) {
+          sendResponse({
+            success: true,
+            scannedFields: [],
+            count: 0,
+            blocked: true,
+            blockCode: block.code,
+            reason: block.message,
+          });
+          return true;
+        }
         const fields = performScan();
         sendResponse({ success: true, scannedFields: fields, count: fields.length });
       } catch (err) {
@@ -548,6 +492,10 @@
 
     // 3. Injector Actions
     if (action === 'FILL_FIELDS') {
+      if (getBlockReason()) {
+        sendResponse({ success: false, blocked: true, error: 'LazyFill is disabled on this site' });
+        return true;
+      }
       if (window.__lazyFillInjector) {
          const res = window.__lazyFillInjector.batchFill(payload.mappings, payload.scannedFields);
          sendResponse({ success: true, filled: res.filled });

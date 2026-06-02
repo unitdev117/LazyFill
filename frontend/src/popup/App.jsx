@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import ProfileManager from '@/features/profiles/ProfileManager';
 import SettingsManager from '@/features/settings/SettingsManager';
 import { Dashboard } from '@/features/dashboard/Dashboard';
+import { DisabledSites } from '@/features/disabled/DisabledSites';
 import { Button } from '@/components/ui/Button';
 import { UserMenu } from '@/components/ui/UserMenu';
 import { AuthContainer } from '@/components/auth/AuthContainer';
@@ -10,10 +11,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/componen
 import { Input } from '@/components/ui/Input';
 import { useChromeStorage } from '@/hooks/useChromeStorage';
 import { CONFIG } from '@/lib/config';
-import { Layout, User, Settings, Shield, Menu } from 'lucide-react';
+import { Layout, User, ShieldOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-import icon48 from '@/assets/icon48.png';
+
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -35,10 +36,18 @@ export default function App() {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: Layout, component: Dashboard },
     { id: 'profiles', label: 'Profiles', icon: User, component: ProfileManager },
-    { id: 'settings', label: 'API Key', icon: Shield, component: SettingsManager },
+    { id: 'disabled', label: 'Disabled', icon: ShieldOff, component: DisabledSites },
   ];
 
-  const ActiveComponent = navItems.find(i => i.id === activeTab)?.component || Dashboard;
+  // Views that are NOT top-level tabs. API Key Settings is reached only from
+  // the profile button menu (UserMenu → "API Key Settings"), keeping the tab
+  // bar to three sections.
+  const auxViews = [
+    { id: 'settings', component: SettingsManager },
+  ];
+
+  const ActiveComponent =
+    [...navItems, ...auxViews].find((i) => i.id === activeTab)?.component || Dashboard;
 
   useEffect(() => {
     if (currentUser && !onboardingDone) {
@@ -166,7 +175,7 @@ export default function App() {
       <div className="w-[450px] h-[590px] flex flex-col bg-background text-foreground overflow-hidden font-outfit pt-0">
         <header className="px-5 pt-1 pb-1 flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl overflow-hidden shadow-lg shadow-primary/20 border border-white/10">
-            <img src={icon48} className="w-full h-full object-cover" alt="LazyFill Logo" />
+            <img src="/assets/icon48.png" className="w-full h-full object-cover" alt="LazyFill Logo" />
           </div>
           <div className="h-10 py-[1px] flex flex-col justify-between">
             <h1 className="font-bold text-xl tracking-wide leading-none">LazyFill</h1>
@@ -197,7 +206,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl overflow-hidden shadow-lg shadow-primary/20 border border-white/10">
             <img 
-              src={icon48} 
+              src="/assets/icon48.png" 
               className="w-full h-full object-cover" 
               alt="LazyFill Logo" 
             />

@@ -25,10 +25,12 @@ export default defineConfig({
     outDir: 'dist',
     modulePreload: false,
     rollupOptions: {
+      // NOTE: the content script is built separately (vite.content.config.js)
+      // as a self-contained IIFE so it can share modules with the background
+      // bundle without rollup emitting a cross-entry chunk.
       input: {
         popup: resolve(__dirname, 'index.html'),
         background: resolve(__dirname, 'src/background/main.js'),
-        content: resolve(__dirname, 'src/content/index.js'),
       },
       output: {
         entryFileNames: `[name].js`,

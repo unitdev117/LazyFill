@@ -8,6 +8,19 @@
  * ============================================================
  */
 
+import { getBlockReason, isSensitiveField } from '../shared/guards.js';
+import {
+  ALLOWED_INPUT_TYPES,
+  DISALLOWED_TAGS,
+  DISALLOWED_ROLES,
+  CHOICE_PLACEHOLDER_PATTERN,
+  getRole,
+  hasAllowedContentEditableValue,
+  hasMeaningfulAriaAttribute,
+  hasChoiceWidgetContainer,
+  isFillableFieldMeta,
+} from '../../shared/field-classification.js';
+
 (function () {
   'use strict';
 
@@ -15,6 +28,8 @@
 
   /* --------------------------------------------------
    *  NATIVE SETTERS — bypass framework wrappers
+   *  (field-rule constants + DOM helpers come from the
+   *   shared, unit-tested field-classification module)
    * -------------------------------------------------- */
 
   const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
@@ -26,68 +41,6 @@
     window.HTMLTextAreaElement.prototype,
     'value'
   )?.set;
-
-  const nativeSelectValueSetter = Object.getOwnPropertyDescriptor(
-    window.HTMLSelectElement.prototype,
-    'value'
-  )?.set;
-
-  const ALLOWED_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password']);
-  const DISALLOWED_TAGS = new Set(['select', 'option', 'optgroup', 'datalist']);
-  const DISALLOWED_ROLES = new Set([
-    'combobox',
-    'listbox',
-    'option',
-    'menu',
-    'menuitem',
-    'tree',
-    'treeitem',
-    'grid',
-    'button',
-    'checkbox',
-    'radio',
-    'switch',
-    'tab',
-    'slider',
-    'spinbutton',
-  ]);
-  const CHOICE_PLACEHOLDER_PATTERN = /^(select|choose)\b/i;
-  const CHOICE_WIDGET_CLASS_PATTERN = /\b(dropdown|picker|autocomplete|combo-?box|select-?input|select-?module)\b/i;
-
-  function getRole(el) {
-    return (el.getAttribute('role') || '').trim().toLowerCase();
-  }
-
-  function getExplicitContentEditableValue(el) {
-    const value = el.getAttribute('contenteditable');
-    return value == null ? null : value.trim().toLowerCase();
-  }
-
-  function hasAllowedContentEditableValue(el) {
-    const value = getExplicitContentEditableValue(el);
-    return value === '' || value === 'true' || value === 'plaintext-only';
-  }
-
-  function hasMeaningfulAriaAttribute(el, attrName) {
-    const value = el.getAttribute(attrName);
-    if (value == null) return false;
-
-    const normalized = value.trim().toLowerCase();
-    return normalized !== '' && normalized !== 'false' && normalized !== 'none';
-  }
-
-  function hasChoiceWidgetContainer(el) {
-    let current = el;
-    for (let depth = 0; current && depth < 5; depth++) {
-      const className = typeof current.className === 'string' ? current.className : '';
-      const identifier = `${current.id || ''} ${className}`;
-      if (CHOICE_WIDGET_CLASS_PATTERN.test(identifier)) {
-        return true;
-      }
-      current = current.parentElement;
-    }
-    return false;
-  }
 
   function isPureTextEntryElement(el) {
     if (!el) return false;
@@ -138,39 +91,25 @@
       return false;
     }
 
+    // Defense in depth: never write to credential / payment / identity fields.
+    if (isSensitiveField({
+      name: el.getAttribute('name') || '',
+      id: el.id || '',
+      placeholder: el.getAttribute('placeholder') || el.getAttribute('aria-placeholder') || '',
+      ariaLabel: el.getAttribute('aria-label') || '',
+      autocomplete: el.getAttribute('autocomplete') || '',
+      type: (el.getAttribute('type') || '').toLowerCase(),
+    })) {
+      return false;
+    }
+
     return true;
   }
 
   function isAllowedFieldMeta(fieldMeta) {
-    if (!fieldMeta || typeof fieldMeta !== 'object') return false;
-
-    const tagName = (fieldMeta.tagName || '').toLowerCase();
-    const type = (fieldMeta.type || '').toLowerCase();
-    const role = (fieldMeta.role || '').toLowerCase();
-    const placeholder = (fieldMeta.placeholder || '').trim().toLowerCase();
-    const domPath = (fieldMeta.domPath || '').toLowerCase();
-
-    if (DISALLOWED_TAGS.has(tagName) || DISALLOWED_ROLES.has(role)) {
-      return false;
-    }
-
-    if (fieldMeta.hasListAttribute) {
-      return false;
-    }
-
-    if (/^(select|choose)\b/.test(placeholder)) {
-      return false;
-    }
-
-    if (CHOICE_WIDGET_CLASS_PATTERN.test(domPath)) {
-      return false;
-    }
-
-    if (tagName === 'input') {
-      return ALLOWED_INPUT_TYPES.has(type);
-    }
-
-    return tagName === 'textarea' || tagName === 'contenteditable';
+    // Shared "is it a plain text field?" decision, plus the injector's
+    // defense-in-depth sensitive-field exclusion.
+    return isFillableFieldMeta(fieldMeta) && !isSensitiveField(fieldMeta);
   }
 
   /* --------------------------------------------------
@@ -337,6 +276,11 @@
   function batchFill(mappings, scannedFields) {
     let filled = 0;
     let failed = 0;
+
+    // Hard stop on secure sites and any site the user disabled.
+    if (getBlockReason()) {
+      return { filled: 0, failed: Array.isArray(mappings) ? mappings.length : 0 };
+    }
 
     mappings.forEach((mapping) => {
       const fieldMeta = scannedFields[mapping.index];
